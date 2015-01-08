@@ -17,7 +17,7 @@ if nargin<3
   X = reshape(X,M,ceil(N/M));
 else
   s   = opts.sigma;
-  ind = opts.ind;
+  ind = opts.indices;
   K   = opts.K;
   M   = opts.M;
   x   = X(ind)';
@@ -27,7 +27,7 @@ pr = Pr(ind,:);
 w = pr./repmat(sum(pr),[K 1]);
   
 Pc = zeros([size(X) size(Pr,2)]);
-parfor r = 1:ceil(N/M)
+for r = 1:ceil(N/M)
   Pc(:,r,:) = kExpQuad2(X(:,r),x,s)*w;    
 end
 

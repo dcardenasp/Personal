@@ -2,40 +2,73 @@ clear all
 close all
 clc
 
-addpath(genpath('/home/dcardenasp/Documents/MATLAB/SliceBrowser'))
-addpath(genpath('/home/dcardenasp/Documents/MATLAB/spm8'))
-addpath(genpath('/home/dcardenasp/Documents/MATLAB/MLmat'))
-%addpath(genpath('/home/dcardenasp/Documents/MATLAB/fieldtrip'))
+if ismac
+  path_base = '/Users/dcardenasp/Documents/MATLAB';
+elseif isunix
+  path_base = '/home/dcardenasp/Documents/MATLAB';
+end
 
+addpath(genpath(fullfile(path_base,'SliceBrowser')))
+addpath(genpath(fullfile(path_base,'spm8')))
+addpath(genpath(fullfile(path_base,'MLmat')))
 
+blockwise = true;
 V = spm_vol('T1_1.nii');
 K  = 1000;
+M = 1e00;
+B = 3;
 
 X = spm_read_vols(V);
 Pr = spm_read_vols(spm_vol('white_1.nii'));
 Pr(:,:,:,2) = spm_read_vols(spm_vol('grey_1.nii'));
 Pr(:,:,:,3) = spm_read_vols(spm_vol('csf_1.nii'));
+
 sPr = sum(Pr(:,:,:,1:3),4);
 Pr = reshape(Pr,[numel(X) 3]);
 Pr(sPr(:)>1.0,:) = Pr(sPr(:)>1.0,:) - repmat((sPr(sPr(:)>1.0)-1)/3,[1 3]);
 Pr(:,4) = 1-sum(Pr(:,1:3),2);
 siz = size(X);
 N = prod(siz);
-M = 2e4;
 
-ind  = randperm(numel(X),K);
-x = X(ind)';
-X = X(:);
-
-d = pdist(x);
-s = kScaleOptimization(d);
-
-Y = [X;ones(ceil(N/M)*M-N,1)];
-Y = reshape(Y,M,ceil(N/M));
-
+if blockwise
+  ind  = randperm(floor(N/(B^3)),K);
+  blkSiz = round(siz/B);
+  i=1;
+  Ind = cell(B^3,1);
+  s   = cell(B^3,1);
+  Regs = zeros(siz);
+  
+  for b1=0:B-1
+  for b2=0:B-1
+  for b3=0:B-1
+      
+    i1 = b1*(blkSiz(1)+1)+(1:blkSiz(1)+1);
+    i2 = b2*(blkSiz(2)+1)+(1:blkSiz(2)+1);
+    i3 = b3*(blkSiz(3)+1)+(1:blkSiz(3)+1);
+    [i1,i2,i3]=ndgrid(i1,i2,i3);
+    i4 = sub2ind(siz, min(i1(:),siz(1)), min(i2(:),siz(2)), min(i3(:),siz(3)));
+    Regs(i4) = i;
+    b = sub2ind(siz, b1*blkSiz(1)+1, b2*blkSiz(2)+1, b3*blkSiz(3)+1);
+    Ind{i} = ind+b;
+    x = reshape(X(Ind{i}),[K 1]);
+    d = pdist(x);
+    s{i} = kScaleOptimization(d);
+    i = i+1;
+  end
+  end
+  end
+else
+  Ind = randperm(numel(X),K);
+  x = X(Ind)';
+  X = X(:);
+  d = pdist(x);
+  s = kScaleOptimization(d);
+  Y = [X;ones(ceil(N/M)*M-N,1)];
+  Y = reshape(Y,M,ceil(N/M));
+end
 opts.M = M;
 opts.K = K;
-opts.ind = ind;
+opts.indices = Ind;
 opts.sigma = s;
 opts.MaxIter = 100;
 
@@ -44,7 +77,11 @@ err = zeros(1,opts.MaxIter);
 for iter = 1:opts.MaxIter
   ticid=tic;
   Pr_ant = Pr;
-  [Pr, Pc, w] = BayesSegIter(Y,Pr,opts);
+  if blockwise
+    [Pr, Pc, w] = patchBayesSegIter(X,Pr,Regs,opts);
+  else
+    [Pr, Pc, w] = BayesSegIter(Y,Pr,opts);
+  end
   t = toc(ticid);
   
   err(iter) = norm(Pr-Pr_ant);
