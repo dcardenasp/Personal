@@ -12,7 +12,7 @@ addpath(genpath(fullfile(path_base,'SliceBrowser')))
 addpath(genpath(fullfile(path_base,'spm8')))
 addpath(genpath(fullfile(path_base,'MLmat')))
 
-blockwise = true;
+blockwise = false;
 V = spm_vol('subject_01/T1_1.nii');
 K  = 1e3;
 M = 5e3;
@@ -146,8 +146,8 @@ for iter = 1:opts.MaxIter
   else    
     [Pr, Pc, w] = BayesSegIter(Y,Pr,opts);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    pr = Pr(Ind,:);
-    w = pr./repmat(sum(pr),[K 1]);
+%     pr = Pr(Ind,:);
+%     w = pr./repmat(sum(pr),[K 1]);
     num = zeros(1,N);    
     parfor r=1:N
       num(r) = ((X(r)-x').^2)*w*Pr(r,:)';    

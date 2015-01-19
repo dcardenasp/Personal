@@ -83,6 +83,19 @@ int main(int argc, char *argv[])
       prImages.push_back(tmp->GetOutput());
       numClasses++;
   }
+
+  float G[10][10]; //up to 10 classes. WARNING. Should be improved.
+  for(int c1=0; c1<numClasses; c1++)
+  for(int c2=0; c2<numClasses; c2++)
+  {
+    if(c1==c2)
+      G[c1][c2] = 0.0;
+    else if(abs(c1-c2)==1)
+      G[c1][c2] = 0.5;
+    else
+      G[c1][c2] = 3.0;
+  }
+
   std::cout << "Prior read and built\n";
 
   //******AFFINE REGISTERING PRIORS**********//
@@ -209,7 +222,7 @@ int main(int argc, char *argv[])
   itk::NeighborhoodIterator<VectorImageType> itNeigh(neighRadius,posteriors,posteriors->GetLargestPossibleRegion());
   float s = 33.0, z=0;
   unsigned int i=0;
-  VectorImageType::PixelType sumPr, h, means, cov, tmp, t, h_a, means_a, cov_a;
+  VectorImageType::PixelType sumPr, h, means, cov, tmp, h_a, means_a, cov_a;
   sumPr.SetSize(numClasses);
   h.SetSize(numClasses);
   means.SetSize(numClasses);
@@ -217,50 +230,35 @@ int main(int argc, char *argv[])
   tmp.SetSize(numClasses);
   sumPr.Fill(0.0);
 
+  /*FOR PARZEN ESTIMATION:*/
+  unsigned int M = 500;
+  std::vector<ScalarImageType::IndexType> indexes(M);
+  std::vector<VectorImageType::PixelType> w(M);
+  std::vector<ScalarImageType::PixelType> f(M);
+
   if( method==2 )
   {
     itk::ImageRandomConstIteratorWithIndex<ScalarImageType> itRnd(fixed->GetOutput(),fixed->GetOutput()->GetLargestPossibleRegion());
-    itRnd.SetNumberOfSamples(10000);
-    std::vector<ScalarImageType::IndexType> indexes(600);
-    std::vector<VectorImageType::PixelType> cPos(600);
-    std::vector<ScalarImageType::PixelType> f(600);
+    itRnd.SetNumberOfSamples(M);
     h.Fill(0.0);
-    for(i=0,itRnd.GoToBegin(); !itRnd.IsAtEnd(); ++itRnd)
+    for(i=0,itRnd.GoToBegin(); !itRnd.IsAtEnd(); ++itRnd,i++)
     {
+      indexes[i] = itRnd.GetIndex();
       itPos.SetIndex(indexes[i]);
-      tmp = itPos.Get();
-      unsigned char etiq = 0;
-      for(unsigned int c=0; c<numClasses; c++)
-        etiq = (tmp[c]>tmp[etiq])?c:etiq;
-      if(h[etiq]<100)
-      {
-        h[etiq]   += 1.0;
-        indexes[i] = itRnd.GetIndex();
-        cPos[i].SetSize(numClasses);
-        cPos[i]    = tmp;
-        f[i]       = itRnd.Get();
-        i++;
-      }
-      z = 0;
-      for(unsigned int c=0; c<numClasses; c++)
-        z += h[c];
-      if(z>=600)
-        break;
+      f[i] = itRnd.Get();
+      w[i].SetSize(numClasses);
+      w[i] = itPos.Get();
+      h += w[i];
     }
-    for(itFixed.GoToBegin(), itPr.GoToBegin(), itPos.GoToBegin(); !itFixed.IsAtEnd(); ++itFixed, ++itPr, ++itPos)
+    for(i=0; i<M; i++)
     {
-      tmp.Fill(0.0);
-      for (i=0;i<600;i++)
-      {
-        t[i]=kGauss(itFixed.Get(),f[i],s);
-        tmp = tmp + t[i]*cPos[i];
-      }
+      for(unsigned int c=0; c<numClasses; c++)
+      w[i][c] = w[i][c]/h[c];
     }
   }
-
     
-  for(itPr.GoToBegin(); !itPr.IsAtEnd(); ++itPr)
-      sumPr = sumPr + itPr.Get();
+  /*for(itPr.GoToBegin(); !itPr.IsAtEnd(); ++itPr)
+      sumPr = sumPr + itPr.Get();*/
 
   h.Fill(1.0/numClasses);
   means.Fill(0.0);
@@ -273,17 +271,37 @@ int main(int argc, char *argv[])
     for(itFixed.GoToBegin(), itPr.GoToBegin(), itPos.GoToBegin(); !itFixed.IsAtEnd(); ++itFixed, ++itPr, ++itPos)
     {
       z=0;
-      for(unsigned int c=0; c<numClasses; c++)
+      switch(method)
       {
-        tmp[c]=itPr.Get()[c]*h[c]*kGauss(itFixed.Get(), means[c], sqrt(cov[c]));
-        z += tmp[c];
+      case 0:
+          for(unsigned int c=0; c<numClasses; c++)
+          {
+            tmp[c]=itPr.Get()[c]*h[c]*kGauss(itFixed.Get(), means[c], sqrt(cov[c]));
+            z += tmp[c];
+          }
+          break;
+      case 2:
+          tmp.Fill(0.0);
+          for (i=0;i<M;i++)
+          {
+            tmp = tmp + kGauss(itFixed.Get(),f[i],sqrt(cov[0]))*w[i];
+          }
+          for(unsigned int c=0; c<numClasses; c++)
+          {
+            tmp[c] = itPr.Get()[c]*h[c]*tmp[c];
+            z += tmp[c];
+          }
+          break;
       }
       itPos.Set(tmp/z); //z: shouldn't sum up to zero
     }
 
-    for(itNeigh.GoToBegin(); !itNeigh.IsAtEnd(); ++itNeigh)
+
+    /*for(itNeigh.GoToBegin(); !itNeigh.IsAtEnd(); ++itNeigh)
     {
       tmp.Fill(0.0);
+      VectorImageType::PixelType u;
+      u.SetSize(numClasses);
       for(unsigned int r = 0; r < 27; r++)
       {
         bool IsInBounds;
@@ -293,11 +311,18 @@ int main(int argc, char *argv[])
           tmp += itNeigh.GetPixel(r);
         }
         z = 0;
-        for(unsigned int c=0; c<numClasses; c++)
-          z += tmp[c];
+        for(unsigned int c1=0; c1<numClasses; c1++)
+        {
+          for(unsigned int c2=0; c2<numClasses; c2++)
+          {
+            u[c1] = exp(-G[c1][c2]*tmp[c2]);
+          }
+          u[c1] = u[c1]*itNeigh.GetCenterPixel()[c1];
+          z += u[c1];
+        }
       }
-      std::cout << itNeigh.GetCenterPixel() << "\t" << itNeigh.GetIndex() << "\t" << tmp/z << "\t" << z << std::endl;
-    }
+      itNeigh.SetCenterPixel(u/z);
+    }*/
 
     h_a = h;
     means_a = means;
