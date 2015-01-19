@@ -25,10 +25,9 @@ end
 
 pr = Pr(ind,:);
 w = pr./repmat(sum(pr),[K 1]);
-  
 Pc = zeros([size(X) size(Pr,2)]);
 parfor r = 1:ceil(N/M)
-  Pc(:,r,:) = kExpQuad2(X(:,r),x,s)*w;    
+  Pc(:,r,:) = kExpQuad2(X(:,r),x,s)*w;  
 end
 
 Pc=reshape(Pc,size(Pc,1)*size(Pc,2),size(Pc,3));

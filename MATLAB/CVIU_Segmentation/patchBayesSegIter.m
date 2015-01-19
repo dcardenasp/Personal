@@ -31,10 +31,5 @@ for r = 1:numel(R)
   Pc(Regs(:)==R(r),:) = tmp(1:Nr,:);  
 end
 
-% for n = 1:N
-%   r=find(Regs(n)==R);
-%   Pc(n,:) = kExpQuad2(X(n),x{r},s{r})*w{r};
-% end
-
 Pos = Pc.*Pr;
 Pos = Pos./repmat(sum(Pos,2)+eps,[1 size(Pc,2)]);  
