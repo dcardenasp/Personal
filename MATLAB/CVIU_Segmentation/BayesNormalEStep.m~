@@ -1,0 +1,17 @@
+function Q = BayesNormalEStep(Y,B,opts)
+
+N   = prod(opts.size);
+C   = size(B,2);
+Q  = zeros([N C]);
+mu  = zeros(1,C);
+cov = zeros(1,C);
+gam = opts.mixture;
+gB  = B*gam';
+
+parfor c = 1:C
+  Q(:,c) = gam(c)*B(:,c).*mvnpdf(Y,mu(c),cov(c))./gB;
+end
+Q1  = Q*ones(C,1);
+parfor c = 1:C
+  Q(:,c) = Q()
+end

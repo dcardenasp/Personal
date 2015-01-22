@@ -12,23 +12,42 @@ addpath(genpath(fullfile(path_base,'SliceBrowser')))
 addpath(genpath(fullfile(path_base,'spm8')))
 addpath(genpath(fullfile(path_base,'MLmat')))
 
-blockwise = false;
-V = spm_vol('subject_01/T1_1.nii');
-K  = 1e3;
+method = 3; %0: parzen full. 1: parzen block. 2: parzen local. 3: Parzen coord as feature
+regularization = true;
+V = spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/T1_1.nii');
+K  = 1000;
 M = 5e3;
 B = 3;
+radius = 20;
 
 y = (0:600)';
 
 X = spm_read_vols(V);
 siz = size(X);
 N = prod(siz);
-Pr = spm_read_vols(spm_vol('subject_01/c1_1.nii'));
-Pr(:,:,:,2) = spm_read_vols(spm_vol('subject_01/c2_1.nii'));
-Pr(:,:,:,3) = spm_read_vols(spm_vol('subject_01/c3_1.nii'));
-Pr(:,:,:,4) = spm_read_vols(spm_vol('subject_01/c4_1.nii'));
-Pr(:,:,:,5) = spm_read_vols(spm_vol('subject_01/c5_1.nii'));
-Pr(:,:,:,6) = spm_read_vols(spm_vol('subject_01/c6_1.nii'));
+Pr = zeros([siz 6]);
+list = [6 5 4 3 1 2];
+parfor l=1:numel(list)
+  Pr(:,:,:,l) = spm_read_vols(spm_vol(...
+    ['/media/dcardenasp/VERBATIM/DataBases/subject_01/c' num2str(list(l)) '_1.nii']));
+end
+% Pr(:,:,:,2) = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/c5_1.nii'));
+% Pr(:,:,:,3) = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/c4_1.nii'));
+% Pr(:,:,:,4) = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/c3_1.nii'));
+% Pr(:,:,:,5) = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/c1_1.nii'));
+% Pr(:,:,:,6) = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/c2_1.nii'));
+
+numClasses  = size(Pr,4);
+G = zeros(numClasses);
+for c1=1:numClasses
+for c2=1:numClasses
+  if abs(c1-c2)==1
+      G(c1,c2) = 0.5;
+  elseif abs(c1-c2)>1
+      G(c1,c2) = 3;
+  end
+end
+end
 
 Pr  = Pr - min(Pr(:));
 sPr = sum(Pr,4);
@@ -41,7 +60,8 @@ X = X(:);
 d = pdist(x);
 s0 = 80;%kScaleOptimization(d);
 
-if blockwise
+switch method
+case 1
   ind = randperm(prod(floor(siz/B)),K);
   [j1,j2,j3]=ind2sub(floor(siz/B),ind);
   blkSiz = floor(siz/B);
@@ -70,21 +90,41 @@ if blockwise
   end
   end
   end  
-else
+case 0
   s = s0;
   Y = [X;ones(ceil(N/M)*M-N,1)];
   Y = reshape(Y,M,ceil(N/M));
+case 2 
+  s = 1000;
+case 3
+  s = 1000;      
 end
+
 opts.M = M;
 opts.K = K;
 opts.indices = Ind;
 opts.sigma = s;
 opts.MaxIter = 100;
 opts.minEnergyDiff = 1e-4;
+opts.size = siz;
+opts.radius = radius;
+opts.Transition = G;
+opts.covariance = [s^2 0 0 0; 0 5^2 0 0; 0 0 5^2 0; 0 0 0 5^2];
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-if blockwise    
+switch method
+case 0
+    pr = Pr(Ind,:);
+    w = pr./repmat(sum(pr),[K 1]);
+    num = zeros(1,N);
+    den = num;
+    parfor r=1:N
+        num(r) = ((X(r)-x').^2)*w*Pr(r,:)';
+        den(r) = sum(w*Pr(r,:)');
+    end
+    opts.sigma = sqrt(sum(num)/sum(den));
+case 1
     R = unique(Regs(:));
     for reg = 1:numel(R)
         pr = Pr(Ind{reg},:);
@@ -99,16 +139,10 @@ if blockwise
         s{reg} = sqrt(mean(num));
     end
     opts.sigma = s;
-else
-    pr = Pr(Ind,:);
-    w = pr./repmat(sum(pr),[K 1]);
-    num = zeros(1,N);
-    den = num;
-    parfor r=1:N
-        num(r) = ((X(r)-x').^2)*w*Pr(r,:)';
-        den(r) = sum(w*Pr(r,:)');
-    end
-    opts.sigma = sqrt(sum(num)/sum(den));
+case 2
+    w = Inf;
+case 3
+    w = Inf;
 end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -116,16 +150,17 @@ end
 Pr0  = Pr;
 err  = zeros(1,opts.MaxIter);
 ener = zeros(1,opts.MaxIter);
-if blockwise
+if method == 1
     S = zeros(B^3,opts.MaxIter);
 else
     S = zeros(1,opts.MaxIter);
 end
+
 for iter = 1:opts.MaxIter
   ticid=tic;
   Pr_ant = Pr;
   w_ant = w;
-  if blockwise
+  if method == 1
     [Pr, Pc, w] = patchBayesSegIter(X,Pr,Regs,opts);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     R = unique(Regs(:));
@@ -143,23 +178,32 @@ for iter = 1:opts.MaxIter
     end
     opts.sigma = s;
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-  else    
+  elseif method == 0 
     [Pr, Pc, w] = BayesSegIter(Y,Pr,opts);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%     pr = Pr(Ind,:);
-%     w = pr./repmat(sum(pr),[K 1]);
     num = zeros(1,N);    
     parfor r=1:N
       num(r) = ((X(r)-x').^2)*w*Pr(r,:)';    
     end
     opts.sigma = sqrt(mean(num));
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  elseif method == 2
+    [Pr, Pc, w, s] = LocalBayesSegIter(X,Pr,opts);
+    opts.sigma = s;
+  elseif method == 3
+    tic
+    [Pr, Pc, w] = BayesSegSpaceIter(X,Pr,opts);
+    toc
+    opts.sigma = s;
+  end
+  if regularization
+      Pr = mrfRegularization(Pr,opts);
   end
   t = toc(ticid);
   
   err(iter) = norm(Pr-Pr_ant);  
   ener(iter) = BayesEnergy(Pr,Pc);
-  if blockwise
+  if method == 1
       S(:,iter) = cell2mat(opts.sigma);
   else
       S(iter)   = opts.sigma;
@@ -171,7 +215,7 @@ for iter = 1:opts.MaxIter
   
   %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
   figure(2)
-  if blockwise
+  if method == 1
     for i=1:B^3
       ind2=Ind{i};
       x = reshape(X(ind2),[K 1]);
@@ -180,7 +224,7 @@ for iter = 1:opts.MaxIter
       subplot(ceil(sqrt(B^3)),ceil(sqrt(B^3)),i)
       plot(y,P)
     end
-  else
+  elseif method == 0
     A = kExpQuad2(y,X(Ind),s);
     pr = Pr(Ind,:);
     P = A*w;
@@ -214,19 +258,16 @@ for iter = 1:opts.MaxIter
 end
 
 [~,L1] = max(Pr0,[],2);
-L1 = reshape(L1,siz);
-L1(L1==6) = 0;
+L1 = reshape(L1,siz)-1;
 [~,L2] = max(Pr,[],2);
-L2 = reshape(L2,siz);
-L2(L2==6) = 0;
+L2 = reshape(L2,siz)-1;
 [~,L3] = max(Pc,[],2);
-L3 = reshape(L3,siz);
-L3(L3==6) = 0;
-V.fname = 'subject_01/Pr_1.nii';
+L3 = reshape(L3,siz)-1;
+V.fname = '/media/dcardenasp/VERBATIM/DataBases/subject_01/Pr_1.nii';
 spm_write_vol(V,L1);
-V.fname = 'subject_01/Pos_1.nii';
+V.fname = '/media/dcardenasp/VERBATIM/DataBases/subject_01/Pos_1.nii';
 spm_write_vol(V,L2);
-V.fname = 'subject_01/Pc_1.nii';
+V.fname = '/media/dcardenasp/VERBATIM/DataBases/subject_01/Pc_1.nii';
 spm_write_vol(V,L3);
 
 A = kExpQuad(squareform(d),s,'distances');

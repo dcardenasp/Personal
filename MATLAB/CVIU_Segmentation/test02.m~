@@ -12,7 +12,7 @@ addpath(genpath(fullfile(path_base,'SliceBrowser')))
 addpath(genpath(fullfile(path_base,'spm8')))
 addpath(genpath(fullfile(path_base,'MLmat')))
 
-method = 0; %0: parzen full. 1: parzen block. 2: parzen local
+method = 0; %0: parzen full. 1: parzen block. 2: parzen local. 3: Parzen coord as feature
 regularization = true;
 V = spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/T1_1.nii');
 K  = 1000;
@@ -25,13 +25,17 @@ y = (0:600)';
 X = spm_read_vols(V);
 siz = size(X);
 N = prod(siz);
-
-Pr(:,:,:,1) = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/c6_1.nii'));
-Pr(:,:,:,2) = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/c5_1.nii'));
-Pr(:,:,:,3) = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/c4_1.nii'));
-Pr(:,:,:,4) = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/c3_1.nii'));
-Pr(:,:,:,5) = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/c1_1.nii'));
-Pr(:,:,:,6) = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/c2_1.nii'));
+Pr = zeros([siz 6]);
+list = [6 5 4 3 1 2];
+parfor l=1:numel(list)
+  Pr(:,:,:,l) = spm_read_vols(spm_vol(...
+    ['/media/dcardenasp/VERBATIM/DataBases/subject_01/c' num2str(list(l)) '_1.nii']));
+end
+% Pr(:,:,:,2) = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/c5_1.nii'));
+% Pr(:,:,:,3) = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/c4_1.nii'));
+% Pr(:,:,:,4) = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/c3_1.nii'));
+% Pr(:,:,:,5) = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/c1_1.nii'));
+% Pr(:,:,:,6) = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/c2_1.nii'));
 
 numClasses  = size(Pr,4);
 G = zeros(numClasses);
@@ -90,7 +94,9 @@ case 0
   s = s0;
   Y = [X;ones(ceil(N/M)*M-N,1)];
   Y = reshape(Y,M,ceil(N/M));
-case 2
+case 2 
+  s = 1000;
+case 3
   s = 1000;      
 end
 
@@ -103,6 +109,7 @@ opts.minEnergyDiff = 1e-4;
 opts.size = siz;
 opts.radius = radius;
 opts.Transition = G;
+opts.covariance = [s^2 0 0 0; 0 5^2 0 0; 0 0 5^2 0; 0 0 0 5^2];
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -133,6 +140,8 @@ case 1
     end
     opts.sigma = s;
 case 2
+    w = Inf;
+case 3
     w = Inf;
 end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -180,6 +189,11 @@ for iter = 1:opts.MaxIter
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
   elseif method == 2
     [Pr, Pc, w, s] = LocalBayesSegIter(X,Pr,opts);
+    opts.sigma = s;
+  elseif method == 3
+    tic
+    [Pr, Pc, w] = BayesSegSpaceIter(X,Pr,opts);
+    toc
     opts.sigma = s;
   end
   if regularization
