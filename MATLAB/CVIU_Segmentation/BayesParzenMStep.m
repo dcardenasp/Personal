@@ -8,25 +8,23 @@ w = opts.mixture;
 N = size(Y,1);
 %C = opts.numClasses;
 %blk = 1000;
-Q=Q./F;
+QF=Q./F;
 
 w_grad = zeros(size(w));
 parfor k = 1:K
-  w_grad(k,:) = mvnpdf(x(k,:),Y,cov)'*Q;
+  w_grad(k,:) = mvnpdf(x(k,:),Y,cov)'*QF;
 end
-w = w - step*w_grad;
+w = w + step*w_grad;
 w = w./repmat(sum(w,1),[K 1]);
 
-wkdd = zeros(size(Q));
-wf = zeros(size(Q));
+wkdd = zeros(size(QF));
 parfor r = 1:N
   f = mvnpdf(Y(r,:),x,cov);
   d = (x-Y(r,:));
   kdd = f*(d'*d);
   wkdd(r,:) = kdd'*w;
-  wf(r,:) = f'*w;
 end
-cov = 0.5*sum(sum(wkdd.*Q,1),2)./sum(sum(wf.*Q,1),2);
+cov = 0.5*sum(sum(wkdd.*QF,1),2)/N;
 
 % gpuD = gpuDevice(1);
 % reset(gpuD)
