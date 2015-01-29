@@ -1,4 +1,4 @@
-function [Q,E] = BayesNormalEStep(Y,B,opts)
+function Q = BayesNormalEStep(Y,B,opts)
 
 N   = size(B,1);
 C   = size(B,2);
@@ -24,7 +24,6 @@ parfor c = 1:C
   Q(:,c) = Pc(:,c).*mvnpdf(Y,mu(c),cov(c));
 end
 Q1  = sum(Q,2);
-E   = -sum(log(Q1),1);
 parfor c = 1:C
   Q(:,c) = Q(:,c)./Q1;
 end

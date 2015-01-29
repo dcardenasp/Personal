@@ -14,18 +14,19 @@ addpath(genpath(fullfile(path_base,'SliceBrowser')))
 addpath(genpath(fullfile(path_base,'spm8')))
 addpath(genpath(fullfile(path_base,'MLmat')))
 
-method = 0; %0: 1-Normal by class. 1: parzen full. 2: parzen block. 3: parzen local. 4: Parzen coord as feature
+method = 1; %0: 1-Normal by class. 1: parzen full. 2: parzen block. 3: parzen local. 4: Parzen coord as feature
 regularization = true;
-masked = false;
+masked = true;
 V = spm_vol('/media/dcardenasp/VERBATIM/DataBases/subject_01/T1_1.nii');
-K  = 1000;
+K  = 100;
 M = 5e3;
 B = 3;
 radius = 20;
 maxiter = 20;
 converg = 1e-4;
-alpha = 0;
+alpha = 0.3;
 beta  = 5;
+step = 0.1;
 
 y = (0:600)';
 
@@ -47,9 +48,15 @@ Pr  = reshape(Pr,prod(siz),size(Pr,4));
 
 G = transMatrix(numClasses,alpha,beta);
 
-Ind = randperm(numel(X),K);
-x = X(Ind)';
-X = reshape(X,[N 1]);
+
+if method==1
+  Ind = randperm(numel(X),K);
+  w = ones(K,numClasses);  
+%   x = X(Ind)';
+%   X = reshape(X,[N 1]);
+%   w = Pr(Ind,:);  
+  w = w./repmat(sum(w,1),[K 1]);
+end
 
 opts.M = M;
 opts.K = K;
@@ -61,8 +68,17 @@ opts.size = siz;
 opts.radius = radius;
 opts.Transition = G;
 opts.mrf = regularization;
-opts.covariance = eye(4);%[s^2 0 0 0; 0 5^2 0 0; 0 0 5^2 0; 0 0 0 5^2];
-opts.mixture = ones(1,numClasses)/numClasses;
+opts.numClasses = numClasses;
+switch method
+case 0
+  opts.mixture = ones(1,numClasses)/numClasses;
+  opts.covariance = eye(4);%[s^2 0 0 0; 0 5^2 0 0; 0 0 5^2 0; 0 0 0 5^2];
+case 1
+  opts.mixture = w;
+  opts.samples = reshape(X(Ind),K,1);
+  opts.covariance = 100^2;
+end
+opts.step = step;
 
 err  = zeros(1,opts.MaxIter);
 ener = zeros(1,opts.MaxIter);
@@ -76,7 +92,8 @@ for iter = 1:opts.MaxIter
     L1  = (reshape(L1,siz)-1)>0;
     SE  = strel('ball',10,10,8);
     L2  = imdilate(1.0*L1,SE);
-    ind = L2(:)>0;
+    ind = L2(:)>10;
+    ind = randperm(N,5*K);
   else
     ind = true(N,1);
   end
@@ -86,12 +103,15 @@ for iter = 1:opts.MaxIter
   switch method
   case 0
     opts = BayesNormalMStep(X(ind),Pr(ind,:),Pos(ind,:),opts); %M-step
-    [Pos,ener(iter)] = BayesNormalEStep(X,Pr,opts); %E-step        
+    [Pos,ener(iter)] = BayesNormalEStep(X,Pr,opts); %E-step   
+  case 1
+    F = BayesLikelihood(X(:),opts);
+    [opts.w, opts.covariance] = BayesParzenMStep(X(ind)',F(ind,:),Pos(ind,:),opts); %M-step
   end
   
   t = toc(ticid);
   
-%   ener(iter) = BayesEnergy(Pos);
+  ener(iter) = BayesEnergy(Pr,F);
   figure(1)
   plot(1:iter,ener(1:iter))
   drawnow  
