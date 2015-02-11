@@ -1,0 +1,12 @@
+Iteration 1/20. ED 29090.40. WD Inf. Time 1045.95
+Iteration 2/20. ED 665364.98. WD Inf. Time 1042.92
+Iteration 3/20. ED 3182127.69. WD Inf. Time 1048.61
+Iteration 4/20. ED 6958993.63. WD Inf. Time 1047.95
+Iteration 5/20. ED 10291077.70. WD Inf. Time 1051.77
+Iteration 6/20. ED 12514631.51. WD Inf. Time 1048.00
+Iteration 7/20. ED 13800558.78. WD Inf. Time 1049.77
+Iteration 8/20. ED 14492255.21. WD Inf. Time 1052.75
+Iteration 9/20. ED 14850997.48. WD Inf. Time 1059.60
+Iteration 10/20. ED 15033685.13. WD Inf. Time 1051.02
+Operation terminated by user during mvnpdf (line 96)
+
