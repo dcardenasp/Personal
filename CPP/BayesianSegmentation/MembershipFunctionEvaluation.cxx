@@ -14,6 +14,8 @@
 #include "itkRegularStepGradientDescentOptimizerv4.h"
 #include "itkResampleImageFilter.h"
 
+#include "itkImageRegionConstIterator.h"
+
 #include "itkBayesianClassifierInitializationImageFilter.h"
 
 #include "itkRescaleIntensityImageFilter.h"
@@ -63,6 +65,7 @@ int main(int argc, char *argv[])
   //
   // Template/Prior - Query Rigid Registration
   //
+  std::cout << "Starting rigid registration" << std::endl;
   typedef itk::VersorRigid3DTransform< double >                 RigidTransformType;
   RigidTransformType::Pointer  initialTransform = RigidTransformType::New();
   typedef itk::CenteredTransformInitializer
@@ -86,7 +89,7 @@ int main(int argc, char *argv[])
   optimizerScales[4] = translationScale;
   optimizerScales[5] = translationScale;
   gdOptimizer->SetScales( optimizerScales );
-  gdOptimizer->SetNumberOfIterations( 2000 );
+  gdOptimizer->SetNumberOfIterations( 1 );
   gdOptimizer->SetLearningRate( 0.2 );
   gdOptimizer->SetMinimumStepLength( 0.00001 );
   gdOptimizer->SetReturnBestParametersAndValue(true);
@@ -126,17 +129,18 @@ int main(int argc, char *argv[])
     std::cerr << err << std::endl;
     return EXIT_FAILURE;
   }
-
+  const unsigned int numberOfClasses = priorReader->GetOutput()->GetNumberOfComponentsPerPixel();
 
   //
   // Prior rigid mapping
   //
+  std::cout << "Starting the prior mapping" << std::endl;
   const RigidTransformType::ParametersType finalRigidParameters =
           rigidRegistration->GetOutput()->Get()->GetParameters();
   RigidTransformType::Pointer finalRigidTransform = RigidTransformType::New();
   finalRigidTransform->SetFixedParameters( rigidRegistration->GetOutput()->Get()->GetFixedParameters() );
   finalRigidTransform->SetParameters( finalRigidParameters );
-  VectorImageType::PixelType defaultPrior;
+  VectorImageType::PixelType defaultPrior(numberOfClasses);
   defaultPrior.Fill(0.0); defaultPrior[0] = 1.0;
   typedef itk::ResampleImageFilter< VectorImageType, VectorImageType > VectorResampleFilterType;
   VectorResampleFilterType::Pointer vectorResampleFilter = VectorResampleFilterType::New();
@@ -147,7 +151,18 @@ int main(int argc, char *argv[])
   vectorResampleFilter->SetOutputSpacing( queryReader->GetOutput()->GetSpacing() );
   vectorResampleFilter->SetOutputDirection( queryReader->GetOutput()->GetDirection() );
   vectorResampleFilter->SetDefaultPixelValue( defaultPrior );
-  vectorResampleFilter->Update();
+  try
+  {
+    vectorResampleFilter->Update();
+    std::cout << "Priors mapped"
+              << std::endl;
+  }
+  catch( itk::ExceptionObject & err )
+  {
+    std::cerr << "ExceptionObject caught !" << std::endl;
+    std::cerr << err << std::endl;
+    return EXIT_FAILURE;
+  }
 
   //
   // Casting image to sample list
@@ -166,7 +181,48 @@ int main(int argc, char *argv[])
   typedef itk::Statistics::ImageToListSampleAdaptor< ArrayImageType > SampleType;
   typedef itk::Statistics::WeightedMeanSampleFilter< SampleType >
           WeightedMeanAlgorithmType;
+  typedef itk::Statistics::WeightedCovarianceSampleFilter< SampleType >
+          WeightedCovarianceAlgorithmType;
+  WeightedMeanAlgorithmType::WeightArrayType weights[numberOfClasses];
+  typedef itk::Statistics::GaussianMembershipFunction< MeasurementVectorType >
+          DensityFunctionType;
+  std::vector<DensityFunctionType::MeanVectorType> mean(numberOfClasses);
+  std::vector<DensityFunctionType::CovarianceMatrixType> cov(numberOfClasses);
+  unsigned int r=0;
+  for(unsigned int c=0; c<numberOfClasses; c++)
+    weights[c].SetSize(sample->Size());
+  itk::ImageRegionConstIterator<VectorImageType> prIt(vectorResampleFilter->GetOutput(),vectorResampleFilter->GetOutput()->GetLargestPossibleRegion());
+  prIt.GoToBegin();
+  while(!prIt.IsAtEnd())
+  {
+    VectorImageType::PixelType b = prIt.Get();
+    for(unsigned int c=0; c<numberOfClasses; c++)
+      weights[c][r] = b[c];
+    r++;
+    ++prIt;
+  }
 
+  for(unsigned int c=0; c<numberOfClasses; c++)
+  {
+    std::cout << "Class " << c << " :" << std::endl;
+    WeightedMeanAlgorithmType::Pointer weightedMeanAlgorithm
+            = WeightedMeanAlgorithmType::New();
+    weightedMeanAlgorithm->SetInput( sample );
+    weightedMeanAlgorithm->SetWeights( weights[c] );
+    weightedMeanAlgorithm->Update();
+    std::cout <<"Sample weighted mean = "
+              << weightedMeanAlgorithm->GetMean() << std::endl;
+    mean[c] = weightedMeanAlgorithm->GetMean();
+    WeightedCovarianceAlgorithmType::Pointer weightedCovarianceAlgorithm =
+                                          WeightedCovarianceAlgorithmType::New();
+    weightedCovarianceAlgorithm->SetInput( sample );
+    weightedCovarianceAlgorithm->SetWeights( weights[c] );
+    weightedCovarianceAlgorithm->Update();
+    std::cout << "Sample weighted covariance = " << std::endl;
+    std::cout << weightedCovarianceAlgorithm->GetCovarianceMatrix() << std::endl;
+    cov[c] = weightedCovarianceAlgorithm->GetCovarianceMatrix();
+  }
+/*
   WeightedMeanAlgorithmType::WeightArrayType weightArray( sample->Size() );
   weightArray.Fill( 1.0 );
   WeightedMeanAlgorithmType::Pointer weightedMeanAlgorithm =
@@ -187,17 +243,16 @@ int main(int argc, char *argv[])
   std::cout << "Sample weighted covariance = " << std::endl;
   std::cout << weightedCovarianceAlgorithm->GetCovarianceMatrix() << std::endl;
 
+*/
 
-  typedef itk::Statistics::GaussianMembershipFunction< MeasurementVectorType >
-          DensityFunctionType;
   DensityFunctionType::Pointer df1 = DensityFunctionType::New();
   df1->SetMeasurementVectorSize( 1 );
-  DensityFunctionType::MeanVectorType mean
+  /*DensityFunctionType::MeanVectorType mean
           = weightedMeanAlgorithm->GetMean();
   DensityFunctionType::CovarianceMatrixType cov
-          = weightedCovarianceAlgorithm->GetCovarianceMatrix();
-  df1->SetMean( mean );
-  df1->SetCovariance( cov );
+          = weightedCovarianceAlgorithm->GetCovarianceMatrix();*/
+  df1->SetMean( mean[0] );
+  df1->SetCovariance( cov[0] );
 
   typedef itk::BayesianClassifierInitializationImageFilter< ImageType >
           BayesianInitializerType;

@@ -128,7 +128,7 @@ int main(int argc, char *argv[])
   registration->SetInterpolator(    interpolator  );
   registration->SetFixedImage(      fixed->GetOutput()  );
   registration->SetMovingImage(     moving->GetOutput() );
-  metric->SetNumberOfHistogramBins( 50 );
+  metric->SetNumberOfHistogramBins( 256 );
   ScalarImageType::RegionType fixedRegion = fixed->GetOutput()->GetBufferedRegion();
   const unsigned int numberOfPixels = fixedRegion.GetNumberOfPixels();
   metric->ReinitializeSeed( 76926294 );
