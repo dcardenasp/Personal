@@ -17,12 +17,13 @@
 #include "itkImageRegionConstIterator.h"
 
 #include "itkBayesianClassifierInitializationImageFilter.h"
-
+#include "itkBayesianClassifierImageFilter.h"
 #include "itkRescaleIntensityImageFilter.h"
 
 #include "itkWeightedMeanSampleFilter.h"
 #include "itkWeightedCovarianceSampleFilter.h"
 #include "itkGaussianMembershipFunction.h"
+#include "itkSampleClassifierFilter.h"
 int main(int argc, char *argv[])
 {
   const unsigned int Dimension = 3;
@@ -89,7 +90,7 @@ int main(int argc, char *argv[])
   optimizerScales[4] = translationScale;
   optimizerScales[5] = translationScale;
   gdOptimizer->SetScales( optimizerScales );
-  gdOptimizer->SetNumberOfIterations( 1 );
+  gdOptimizer->SetNumberOfIterations( 500 );
   gdOptimizer->SetLearningRate( 0.2 );
   gdOptimizer->SetMinimumStepLength( 0.00001 );
   gdOptimizer->SetReturnBestParametersAndValue(true);
@@ -179,159 +180,96 @@ int main(int argc, char *argv[])
   // Parameter estimation
   //
   typedef itk::Statistics::ImageToListSampleAdaptor< ArrayImageType > SampleType;
-  typedef itk::Statistics::WeightedMeanSampleFilter< SampleType >
-          WeightedMeanAlgorithmType;
   typedef itk::Statistics::WeightedCovarianceSampleFilter< SampleType >
           WeightedCovarianceAlgorithmType;
-  WeightedMeanAlgorithmType::WeightArrayType weights[numberOfClasses];
+  std::vector< WeightedCovarianceAlgorithmType::Pointer > parameterEstimators;
   typedef itk::Statistics::GaussianMembershipFunction< MeasurementVectorType >
-          DensityFunctionType;
-  std::vector<DensityFunctionType::MeanVectorType> mean(numberOfClasses);
-  std::vector<DensityFunctionType::CovarianceMatrixType> cov(numberOfClasses);
-  unsigned int r=0;
-  for(unsigned int c=0; c<numberOfClasses; c++)
-    weights[c].SetSize(sample->Size());
-  itk::ImageRegionConstIterator<VectorImageType> prIt(vectorResampleFilter->GetOutput(),vectorResampleFilter->GetOutput()->GetLargestPossibleRegion());
-  prIt.GoToBegin();
-  while(!prIt.IsAtEnd())
-  {
-    VectorImageType::PixelType b = prIt.Get();
-    for(unsigned int c=0; c<numberOfClasses; c++)
-      weights[c][r] = b[c];
-    r++;
-    ++prIt;
-  }
-
-  for(unsigned int c=0; c<numberOfClasses; c++)
+          MembershipFunctionType;
+  typedef itk::BayesianClassifierInitializationImageFilter< ImageType >
+          BayesianInitializerType;    
+  typedef BayesianInitializerType::MembershipFunctionContainerType
+          MembershipFunctionContainerType;
+  MembershipFunctionContainerType::Pointer membershipFunctionContainer
+          = MembershipFunctionContainerType::New();
+  membershipFunctionContainer->Reserve(numberOfClasses);
+  for ( unsigned int c = 0; c < numberOfClasses; ++c )
   {
     std::cout << "Class " << c << " :" << std::endl;
-    WeightedMeanAlgorithmType::Pointer weightedMeanAlgorithm
-            = WeightedMeanAlgorithmType::New();
-    weightedMeanAlgorithm->SetInput( sample );
-    weightedMeanAlgorithm->SetWeights( weights[c] );
-    weightedMeanAlgorithm->Update();
+    WeightedCovarianceAlgorithmType::WeightArrayType weights;
+    weights.SetSize(sample->Size());
+    itk::ImageRegionConstIterator<VectorImageType> prIt(vectorResampleFilter->GetOutput(),vectorResampleFilter->GetOutput()->GetLargestPossibleRegion());
+    prIt.GoToBegin();
+    unsigned int r=0;
+    while(!prIt.IsAtEnd())
+    {
+      VectorImageType::PixelType b = prIt.Get();
+      weights[r] = b[c];
+      ++prIt;
+      r++;
+    }
+    parameterEstimators.push_back( WeightedCovarianceAlgorithmType::New() );
+    parameterEstimators[c]->SetInput( sample );
+    parameterEstimators[c]->SetWeights( weights );
+    parameterEstimators[c]->Update();
     std::cout <<"Sample weighted mean = "
-              << weightedMeanAlgorithm->GetMean() << std::endl;
-    mean[c] = weightedMeanAlgorithm->GetMean();
-    WeightedCovarianceAlgorithmType::Pointer weightedCovarianceAlgorithm =
-                                          WeightedCovarianceAlgorithmType::New();
-    weightedCovarianceAlgorithm->SetInput( sample );
-    weightedCovarianceAlgorithm->SetWeights( weights[c] );
-    weightedCovarianceAlgorithm->Update();
+              << parameterEstimators[c]->GetMean() << std::endl;
     std::cout << "Sample weighted covariance = " << std::endl;
-    std::cout << weightedCovarianceAlgorithm->GetCovarianceMatrix() << std::endl;
-    cov[c] = weightedCovarianceAlgorithm->GetCovarianceMatrix();
+    std::cout << parameterEstimators[c]->GetCovarianceMatrix() << std::endl;
+    MembershipFunctionType::Pointer membershipFunction =
+              MembershipFunctionType::New();
+    membershipFunction->SetMean( parameterEstimators[c]->GetMean() );
+    membershipFunction->SetCovariance( parameterEstimators[c]->GetCovarianceMatrix() );
+    membershipFunctionContainer->SetElement( c, membershipFunction.GetPointer() );
   }
-/*
-  WeightedMeanAlgorithmType::WeightArrayType weightArray( sample->Size() );
-  weightArray.Fill( 1.0 );
-  WeightedMeanAlgorithmType::Pointer weightedMeanAlgorithm =
-          WeightedMeanAlgorithmType::New();
-  weightedMeanAlgorithm->SetInput( sample );
-  weightedMeanAlgorithm->SetWeights( weightArray );
-  weightedMeanAlgorithm->Update();
-  std::cout << "Sample weighted mean = "
-            << weightedMeanAlgorithm->GetMean() << std::endl;
 
-  typedef itk::Statistics::WeightedCovarianceSampleFilter< SampleType >
-          WeightedCovarianceAlgorithmType;
-  WeightedCovarianceAlgorithmType::Pointer weightedCovarianceAlgorithm =
-                                        WeightedCovarianceAlgorithmType::New();
-  weightedCovarianceAlgorithm->SetInput( sample );
-  weightedCovarianceAlgorithm->SetWeights( weightArray );
-  weightedCovarianceAlgorithm->Update();
-  std::cout << "Sample weighted covariance = " << std::endl;
-  std::cout << weightedCovarianceAlgorithm->GetCovarianceMatrix() << std::endl;
-
-*/
-
-  DensityFunctionType::Pointer df1 = DensityFunctionType::New();
-  df1->SetMeasurementVectorSize( 1 );
-  /*DensityFunctionType::MeanVectorType mean
-          = weightedMeanAlgorithm->GetMean();
-  DensityFunctionType::CovarianceMatrixType cov
-          = weightedCovarianceAlgorithm->GetCovarianceMatrix();*/
-  df1->SetMean( mean[0] );
-  df1->SetCovariance( cov[0] );
-
-  typedef itk::BayesianClassifierInitializationImageFilter< ImageType >
-          BayesianInitializerType;
+  //
+  // Compute class likelihoods
+  //
   BayesianInitializerType::Pointer bayesianInitializer
           = BayesianInitializerType::New();
-
   bayesianInitializer->SetInput( queryReader->GetOutput() );
-  bayesianInitializer->SetNumberOfClasses( atoi( argv[3] ) );
-  // TODO add test where we specify membership functions
-  typedef itk::ImageFileWriter<
-    BayesianInitializerType::OutputImageType >  WriterType;
-  WriterType::Pointer writer = WriterType::New();
-  writer->SetInput( bayesianInitializer->GetOutput() );
-  writer->SetFileName( argv[2] );
+  bayesianInitializer->SetNumberOfClasses( numberOfClasses );
+  bayesianInitializer->SetMembershipFunctions( membershipFunctionContainer );
   try
-    {
+  {
     bayesianInitializer->Update();
-    }
-  catch( itk::ExceptionObject & excp )
-    {
-    std::cerr << "Exception thrown " << std::endl;
-    std::cerr << excp << std::endl;
+    std::cout << "Class Likelihoods computed"
+              << std::endl;
+  }
+  catch( itk::ExceptionObject & err )
+  {
+    std::cerr << "ExceptionObject caught !" << std::endl;
+    std::cerr << err << std::endl;
     return EXIT_FAILURE;
-    }
+  }
+
+  //
+  // Compute posteriors
+  //
+  typedef unsigned short  LabelType;
+  typedef itk::BayesianClassifierImageFilter< VectorImageType,LabelType,
+          float,float >   ClassifierFilterType;
+  ClassifierFilterType::Pointer classifier = ClassifierFilterType::New();
+  classifier->SetInput( bayesianInitializer->GetOutput() );
+  classifier->SetPriors( vectorResampleFilter->GetOutput() );
+  typedef ClassifierFilterType::OutputImageType      ClassifierOutputImageType;
+  typedef itk::ImageFileWriter< ClassifierOutputImageType >    WriterType;
+  WriterType::Pointer writer = WriterType::New();
+  writer->SetFileName( argv[4] );
+  writer->SetInput( classifier->GetOutput() );
   try
     {
     writer->Update();
     }
   catch( itk::ExceptionObject & excp )
     {
-    std::cerr << "Exception thrown " << std::endl;
+    std::cerr << "Exception caught: " << std::endl;
     std::cerr << excp << std::endl;
     return EXIT_FAILURE;
     }
-  if( argv[4] && argv[5] )
-    {
-    typedef BayesianInitializerType::OutputImageType MembershipImageType;
-    typedef itk::Image< MembershipImageType::InternalPixelType,
-                        Dimension > ExtractedComponentImageType;
-    ExtractedComponentImageType::Pointer extractedComponentImage =
-                                    ExtractedComponentImageType::New();
-    extractedComponentImage->CopyInformation(
-                          bayesianInitializer->GetOutput() );
-    extractedComponentImage->SetBufferedRegion( bayesianInitializer->GetOutput()->GetBufferedRegion() );
-    extractedComponentImage->SetRequestedRegion( bayesianInitializer->GetOutput()->GetRequestedRegion() );
-    extractedComponentImage->Allocate();
-    typedef itk::ImageRegionConstIterator< MembershipImageType > ConstIteratorType;
-    typedef itk::ImageRegionIterator< ExtractedComponentImageType > IteratorType;
-    ConstIteratorType cit( bayesianInitializer->GetOutput(),
-                     bayesianInitializer->GetOutput()->GetBufferedRegion() );
-    IteratorType it( extractedComponentImage,
-                     extractedComponentImage->GetLargestPossibleRegion() );
-    const unsigned int componentToExtract = atoi( argv[4] );
-    cit.GoToBegin();
-    it.GoToBegin();
-    SampleType::Iterator iter = sample->Begin() ;
-    while( !cit.IsAtEnd() )
-    {
-      //it.Set(cit.Get()[componentToExtract]);
-      it.Set( df1->Evaluate( iter.GetMeasurementVector() ) );
-      ++it;
-      ++cit;
-      ++iter;
-    }
-    // Write out the rescaled extracted component
-    typedef itk::Image< unsigned char, Dimension > OutputImageType;
-    typedef itk::RescaleIntensityImageFilter<
-      ExtractedComponentImageType, OutputImageType > RescalerType;
-    RescalerType::Pointer rescaler = RescalerType::New();
-    rescaler->SetInput( extractedComponentImage );
-    rescaler->SetOutputMinimum( 0 );
-    rescaler->SetOutputMaximum( 255 );
-    typedef itk::ImageFileWriter<  OutputImageType
-                        >  ExtractedComponentWriterType;
-    ExtractedComponentWriterType::Pointer
-               rescaledImageWriter = ExtractedComponentWriterType::New();
-    rescaledImageWriter->SetInput( rescaler->GetOutput() );
-    rescaledImageWriter->SetFileName( argv[5] );
-    rescaledImageWriter->Update();
-    }
+  // Testing print
+  classifier->Print( std::cout );
+  std::cout << "Test passed." << std::endl;
+
   return EXIT_SUCCESS;
 }
