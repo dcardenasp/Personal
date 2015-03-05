@@ -15,18 +15,18 @@
  *  limitations under the License.
  *
  *=========================================================================*/
-#ifndef __itkParzenMembershipFunction_hxx
-#define __itkParzenMembershipFunction_hxx
+#ifndef __itkWeightedParzenMembershipFunction_hxx
+#define __itkWeightedParzenMembershipFunction_hxx
 
-#include "itkParzenMembershipFunction.h"
+#include "itkWeightedParzenMembershipFunction.h"
 
 namespace itk
 {
 namespace Statistics
 {
 template< typename TMeasurementVector >
-ParzenMembershipFunction< TMeasurementVector >
-::ParzenMembershipFunction()
+WeightedParzenMembershipFunction< TMeasurementVector >
+::WeightedParzenMembershipFunction()
 {  
   MeasurementVectorType sample;
   sample.Fill( 0.0 );
@@ -47,7 +47,7 @@ ParzenMembershipFunction< TMeasurementVector >
 
 template< typename TMeasurementVector >
 void
-ParzenMembershipFunction< TMeasurementVector >
+WeightedParzenMembershipFunction< TMeasurementVector >
 ::PrintSelf(std::ostream & os, Indent indent) const
 {
   Superclass::PrintSelf(os, indent);
@@ -66,7 +66,7 @@ ParzenMembershipFunction< TMeasurementVector >
 
 template< typename TMeasurementVector >
 void
-ParzenMembershipFunction< TMeasurementVector >
+WeightedParzenMembershipFunction< TMeasurementVector >
 ::SetSampleList( typename SampleListType::Pointer list)
 {
   this->SetMeasurementVectorSize( list->GetMeasurementVectorSize() );
@@ -75,14 +75,26 @@ ParzenMembershipFunction< TMeasurementVector >
   for (unsigned int i=0; i<list->Size(); i++ )
   {
     m_SampleList->SetMeasurementVector(i, list->GetMeasurementVector(i) );
-
   }
   this->Modified();
 }
 
+
 template< typename TMeasurementVector >
 void
-ParzenMembershipFunction< TMeasurementVector >
+WeightedParzenMembershipFunction< TMeasurementVector >
+::SetWeights( WeightArrayType weights )
+{
+  this->m_Weights.SetSize( weights.GetSize() );
+  for (unsigned int i=0; i<weights.GetSize(); i++ )
+  {
+    this->m_Weights.SetElement(i,weights.GetElement(i));
+  }
+}
+
+template< typename TMeasurementVector >
+void
+WeightedParzenMembershipFunction< TMeasurementVector >
 ::SetCovariance(const CovarianceMatrixType & cov)
 {
   // Sanity check
@@ -153,7 +165,7 @@ ParzenMembershipFunction< TMeasurementVector >
 
 template< typename TMeasurementVector >
 inline double
-ParzenMembershipFunction< TMeasurementVector >
+WeightedParzenMembershipFunction< TMeasurementVector >
 ::Evaluate(const MeasurementVectorType & measurement) const
 {
   const MeasurementVectorSizeType measurementVectorSize =
@@ -164,14 +176,14 @@ ParzenMembershipFunction< TMeasurementVector >
   // This is manually done to remove dynamic memory allocation:
   // double temp = dot_product( tempVector,  m_InverseCovariance.GetVnlMatrix() * tempVector );
   //  
-  double summation = 0.0, temp;
+  double summation = 0.0, temp, z=0.0;
   MeasurementVectorType sample;
   for(unsigned int i = 0; i<this->m_SampleList->Size(); i++)
   {
     sample = this->m_SampleList->GetMeasurementVector(i);
     temp = 0.0;
     for(MeasurementVectorSizeType r = 0; r < measurementVectorSize; ++r)
-    {
+    {      
       double rowdot = 0.0;
       for (MeasurementVectorSizeType c = 0; c < measurementVectorSize; ++c)
       {
@@ -179,15 +191,16 @@ ParzenMembershipFunction< TMeasurementVector >
       }
       temp += rowdot * ( measurement[r] - sample[r] );
     }    
-    summation += std::exp(-0.5 * temp);
+    summation += std::exp(-0.5 * temp)*(this->m_Weights.GetElement(i));
+    z += this->m_Weights.GetElement(i);
   }
 
-  return m_PreFactor * summation / static_cast<double>(this->m_SampleList->Size());
+  return m_PreFactor * summation / z;
 }
 
 template< typename TVector >
 typename LightObject::Pointer
-ParzenMembershipFunction< TVector >
+WeightedParzenMembershipFunction< TVector >
 ::InternalClone() const
 {
   LightObject::Pointer loPtr = Superclass::InternalClone();

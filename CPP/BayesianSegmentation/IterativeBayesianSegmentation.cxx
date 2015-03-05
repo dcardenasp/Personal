@@ -3,6 +3,7 @@
 #include "itkVector.h"
 #include "itkImageRegionConstIterator.h"
 #include "itkComposeImageFilter.h"
+#include "itkVectorIndexSelectionCastImageFilter.h"
 //IO
 #include "itkImageFileReader.h"
 #include "itkImageFileWriter.h"
@@ -10,6 +11,7 @@
 #include "itkImageRegistrationMethodv4.h"
 #include "itkMattesMutualInformationImageToImageMetricv4.h"
 #include "itkVersorRigid3DTransform.h"
+#include "itkBSplineTransform.h"
 #include "itkCenteredTransformInitializer.h"
 #include "itkRegularStepGradientDescentOptimizerv4.h"
 #include "itkResampleImageFilter.h"
@@ -23,7 +25,9 @@
 #include "itkWeightedMeanSampleFilter.h"
 #include "itkWeightedCovarianceSampleFilter.h"
 #include "itkGaussianMembershipFunction.h"
+#include "itkWeightedParzenMembershipFunction.h"
 #include "itkSampleClassifierFilter.h"
+
 int main(int argc, char *argv[])
 {
   const unsigned int Dimension = 3;
@@ -32,6 +36,9 @@ int main(int argc, char *argv[])
   typedef itk::Image< ImagePixelType, Dimension > ImageType;
   typedef itk::Image< MeasurementVectorType, Dimension > ArrayImageType;
   typedef itk::VectorImage< ImagePixelType, Dimension > VectorImageType;
+
+  unsigned int memFunc = 0;
+
 
   if( argc < 5 )
     {
@@ -90,7 +97,7 @@ int main(int argc, char *argv[])
   optimizerScales[4] = translationScale;
   optimizerScales[5] = translationScale;
   gdOptimizer->SetScales( optimizerScales );
-  gdOptimizer->SetNumberOfIterations( 500 );
+  gdOptimizer->SetNumberOfIterations( 5 );
   gdOptimizer->SetLearningRate( 0.2 );
   gdOptimizer->SetMinimumStepLength( 0.00001 );
   gdOptimizer->SetReturnBestParametersAndValue(true);
@@ -198,7 +205,7 @@ int main(int argc, char *argv[])
           BayesianInitializerType;
   BayesianInitializerType::Pointer bayesianInitializer
           = BayesianInitializerType::New();
-  unsigned int MaximumNumberOfIterations = 1;
+  unsigned int MaximumNumberOfIterations = 10;
   for(unsigned int CurrentNumberOfIterations=0;
       CurrentNumberOfIterations < MaximumNumberOfIterations;
       CurrentNumberOfIterations++)
@@ -223,31 +230,46 @@ int main(int argc, char *argv[])
     for ( unsigned int c = 0; c < numberOfClasses; ++c )
     {
       std::cout << "Class " << c << " :" << std::endl;
-      WeightedCovarianceAlgorithmType::WeightArrayType weights;
-      weights.SetSize(sample->Size());
-      //itk::ImageRegionConstIterator<VectorImageType> prIt(vectorResampleFilter->GetOutput(),vectorResampleFilter->GetOutput()->GetLargestPossibleRegion());
-      q.GoToBegin();
       unsigned int r=0;
-      while(!q.IsAtEnd())
-      {
-        VectorImageType::PixelType qr = q.Get();
-        weights[r] = qr[c];
-        ++q;
-        r++;
-      }
-      parameterEstimators.push_back( WeightedCovarianceAlgorithmType::New() );
-      parameterEstimators[c]->SetInput( sample );
-      parameterEstimators[c]->SetWeights( weights );
-      parameterEstimators[c]->Update();
-      std::cout <<"Sample weighted mean = "
-                << parameterEstimators[c]->GetMean() << std::endl;
-      std::cout << "Sample weighted covariance = " << std::endl;
-      std::cout << parameterEstimators[c]->GetCovarianceMatrix() << std::endl;
       MembershipFunctionType::Pointer membershipFunction =
                 MembershipFunctionType::New();
-      membershipFunction->SetMean( parameterEstimators[c]->GetMean() );
-      membershipFunction->SetCovariance( parameterEstimators[c]->GetCovarianceMatrix() );
-      membershipFunctionContainer->SetElement( c, membershipFunction.GetPointer() );
+      WeightedCovarianceAlgorithmType::WeightArrayType weights;
+      typedef itk::Statistics::WeightedParzenMembershipFunction< MeasurementVectorType >
+              WParzenMembershipFunctionType;
+      WParzenMembershipFunctionType::Pointer wpmf = WParzenMembershipFunctionType::New();
+      switch(memFunc)
+      {
+      case 0:
+        weights.SetSize(sample->Size());
+        q.GoToBegin();
+
+        while(!q.IsAtEnd())
+        {
+          VectorImageType::PixelType qr = q.Get();
+          weights[r] = qr[c];
+          ++q;
+          r++;
+        }
+        parameterEstimators.push_back( WeightedCovarianceAlgorithmType::New() );
+        parameterEstimators[c]->SetInput( sample );
+        parameterEstimators[c]->SetWeights( weights );
+        parameterEstimators[c]->Update();
+        std::cout <<"Sample weighted mean = "
+                  << parameterEstimators[c]->GetMean() << std::endl;
+        std::cout << "Sample weighted covariance = " << std::endl;
+        std::cout << parameterEstimators[c]->GetCovarianceMatrix() << std::endl;
+        membershipFunction->SetMean( parameterEstimators[c]->GetMean() );
+        membershipFunction->SetCovariance( parameterEstimators[c]->GetCovarianceMatrix() );
+        membershipFunctionContainer->SetElement( c, membershipFunction.GetPointer() );
+        break;
+      case 1:
+        /*wpmf->SetSampleList();
+        wpmf->SetWeights();
+        wpmf->SetCovariance();*/
+
+        membershipFunctionContainer->SetElement( c, wpmf.GetPointer() );
+        break;
+      }
     }
 
   //
@@ -291,6 +313,65 @@ int main(int argc, char *argv[])
       ++q;
       ++b;
     }
+
+  //
+  // RE-Align posteriors
+  //
+  /*  std::cout << "Posterior Realign" << std::endl;
+    const unsigned int SplineOrder = 3;
+    typedef itk::VectorIndexSelectionCastImageFilter<VectorImageType, ImageType>
+            ImageExtractComponentFilterType;
+    typedef itk::BSplineTransform< double, Dimension, SplineOrder >
+            DeformableTransformType;
+    DeformableTransformType::Pointer  bsplineTransformCoarse = DeformableTransformType::New();
+    typedef itk::ImageRegistrationMethodv4
+            < ImageType, ImageType, DeformableTransformType >          DeformableRegistrationType;
+    DeformableRegistrationType::Pointer defRegistration = DeformableRegistrationType::New();
+    unsigned int numberOfGridNodesInOneDimensionCoarse = 5;
+    DeformableTransformType::PhysicalDimensionsType   fixedPhysicalDimensions;
+    DeformableTransformType::MeshSizeType             meshSize;
+    DeformableTransformType::OriginType               fixedOrigin;
+    for( unsigned int i=0; i< Dimension; i++ )
+    {
+      fixedOrigin[i] = queryReader->GetOutput()->GetOrigin()[i];
+      fixedPhysicalDimensions[i] = queryReader->GetOutput()->GetSpacing()[i] *
+          static_cast<double>(
+          queryReader->GetOutput()->GetLargestPossibleRegion().GetSize()[i] - 1 );
+    }
+    meshSize.Fill( numberOfGridNodesInOneDimensionCoarse - SplineOrder );
+    bsplineTransformCoarse->SetTransformDomainOrigin( fixedOrigin );
+    bsplineTransformCoarse->SetTransformDomainPhysicalDimensions(
+                fixedPhysicalDimensions );
+    bsplineTransformCoarse->SetTransformDomainMeshSize( meshSize );
+    bsplineTransformCoarse->SetTransformDomainDirection(
+                queryReader->GetOutput()->GetDirection() );
+    typedef DeformableTransformType::ParametersType     ParametersType;
+    unsigned int numberOfBSplineParameters = bsplineTransformCoarse->GetNumberOfParameters();
+    optimizerScales = OptimizerScalesType( numberOfBSplineParameters );
+    optimizerScales.Fill( 1.0 );
+    gdOptimizer->SetScales( optimizerScales );
+    ParametersType initialDeformableTransformParameters( numberOfBSplineParameters );
+    initialDeformableTransformParameters.Fill( 0.0 );
+    bsplineTransformCoarse->SetParameters( initialDeformableTransformParameters );
+    defRegistration->SetMetric(             metric                      );
+    defRegistration->SetOptimizer(          gdOptimizer                 );
+    defRegistration->SetFixedImage(         queryReader->GetOutput()    );
+    defRegistration->SetInitialTransform(   bsplineTransformCoarse    );
+    gdOptimizer->SetMinimumStepLength(  0.01 );
+    gdOptimizer->SetNumberOfIterations( 200 );
+    //metric->SetNumberOfSpatialSamples( numberOfBSplineParameters * 100 );
+
+    ImageExtractComponentFilterType::Pointer adaptor = ImageExtractComponentFilterType::New();
+    adaptor->SetInput(posterior);
+    for(unsigned int c=0; c<numberOfClasses; c++)
+    {
+      std::cout << "Class " << c << ":" << std::endl;
+      adaptor->SetIndex(c);
+      defRegistration->SetMovingImage( adaptor->GetOutput() );
+      defRegistration->Update();
+
+      std::cout << rigidRegistration->GetOutput()->Get()->GetParameters() << std::endl;
+    }*/
   }
 
   //

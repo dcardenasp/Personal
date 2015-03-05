@@ -2,6 +2,7 @@
 #include "itkPointSet.h"
 
 #include "itkParzenMembershipFunction.h"
+#include "itkWeightedParzenMembershipFunction.h"
 
 int main( int argc, char *argv[] )
 {
@@ -19,9 +20,9 @@ int main( int argc, char *argv[] )
     sample->Resize(2);
 
     VectorType v1;
-    v1[0] = 1.0;
-    v1[1] = 2.0;
-    v1[2] = 3.0;
+    v1[0] = 0.0;
+    v1[1] = 0.0;
+    v1[2] = 0.0;
     sample->SetMeasurementVector(0,v1);
 
     VectorType v2;
@@ -39,13 +40,21 @@ int main( int argc, char *argv[] )
     PMFType::Pointer pmf = PMFType::New();
     pmf->SetSampleList( sample );
 
+    typedef itk::Statistics::WeightedParzenMembershipFunction< VectorType > WPMFType;
+    WPMFType::Pointer wpmf = WPMFType::New();
+    wpmf->SetSampleList( sample );
+    WPMFType::WeightArrayType weights;
+    weights.SetSize( 2 );
+    weights.SetElement( 0, 1.0 );
+    weights.SetElement( 1, 2.0 );
+    wpmf->SetWeights( weights );
+
     for(int d=0; d<ImageDimension; d++)
         cov[d][d] *= atof(argv[1]);
 
-    std::cout << cov << std::endl;
-
     gmf->SetCovariance( cov );
     pmf->SetCovariance( cov );
+    wpmf->SetCovariance( cov );
 
     double s=0;
     for (int i=0; i<2; i++)
@@ -54,8 +63,9 @@ int main( int argc, char *argv[] )
         s += gmf->Evaluate( v3 );
     }
 
-    std::cout << s << std::endl;
+    std::cout << s/2.0 << std::endl;
     std::cout << pmf->Evaluate(v3) << std::endl;
+    std::cout << wpmf->Evaluate(v3) << std::endl;
 
     /*
     typedef itk::PointSet<PixelType, ImageDimension> PointSetType;
