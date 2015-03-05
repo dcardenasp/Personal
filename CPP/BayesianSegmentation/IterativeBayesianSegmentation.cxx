@@ -237,6 +237,9 @@ int main(int argc, char *argv[])
       typedef itk::Statistics::WeightedParzenMembershipFunction< MeasurementVectorType >
               WParzenMembershipFunctionType;
       WParzenMembershipFunctionType::Pointer wpmf = WParzenMembershipFunctionType::New();
+      WParzenMembershipFunctionType::WeightArrayType wpmfWeights;
+      WParzenMembershipFunctionType::CovarianceMatrixType wpmfCov = wpmf->GetCovariance();
+      wpmfCov[0][0] = std::pow(40.0,2.0);
       switch(memFunc)
       {
       case 0:
