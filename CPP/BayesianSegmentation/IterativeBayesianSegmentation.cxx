@@ -12,12 +12,14 @@
 #include "itkImageFileReader.h"
 #include "itkImageFileWriter.h"
 //Registration
+#include "itkCompositeTransform.h"
 #include "itkImageRegistrationMethodv4.h"
 #include "itkMattesMutualInformationImageToImageMetricv4.h"
 #include "itkVersorRigid3DTransform.h"
 #include "itkBSplineTransform.h"
 #include "itkCenteredTransformInitializer.h"
 #include "itkRegularStepGradientDescentOptimizerv4.h"
+#include "itkConjugateGradientLineSearchOptimizerv4.h"
 #include "itkResampleImageFilter.h"
 #include "itkRegistrationParameterScalesFromPhysicalShift.h"
 
@@ -27,6 +29,7 @@
 #include "itkBayesianClassifierImageFilter.h"
 #include "itkRescaleIntensityImageFilter.h"
 
+#include "itkImageToListSampleFilter.h"
 #include "itkWeightedMeanSampleFilter.h"
 #include "itkWeightedCovarianceSampleFilter.h"
 #include "itkGaussianMembershipFunction.h"
@@ -37,6 +40,54 @@
 //  used to monitor the evolution of the registration process.
 //
 #include "itkCommand.h"
+
+template <typename TRegistration>
+class RegistrationInterfaceCommand : public itk::Command
+{
+public:
+  typedef  RegistrationInterfaceCommand   Self;
+  typedef  itk::Command                   Superclass;
+  typedef  itk::SmartPointer<Self>        Pointer;
+  itkNewMacro( Self );
+protected:
+  RegistrationInterfaceCommand() {};
+public:
+  typedef   TRegistration                          RegistrationType;
+  // The Execute function simply calls another version of the \code{Execute()}
+  // method accepting a \code{const} input object
+  void Execute( itk::Object * object, const itk::EventObject & event) ITK_OVERRIDE
+    {
+    Execute( (const itk::Object *) object , event );
+    }
+  void Execute(const itk::Object * object, const itk::EventObject & event) ITK_OVERRIDE
+    {
+    if( !(itk::MultiResolutionIterationEvent().CheckEvent( &event ) ) )
+      {
+      return;
+      }
+    std::cout << "\nObserving from class " << object->GetNameOfClass();
+    if (!object->GetObjectName().empty())
+      {
+      std::cout << " \"" << object->GetObjectName() << "\"" << std::endl;
+      }
+    const RegistrationType * registration = static_cast<const RegistrationType *>( object );
+    if(registration == 0)
+      {
+      itkExceptionMacro(<< "Dynamic cast failed, object of type " << object->GetNameOfClass());
+      }
+    unsigned int currentLevel = registration->GetCurrentLevel();
+    typename RegistrationType::ShrinkFactorsPerDimensionContainerType shrinkFactors =
+                                              registration->GetShrinkFactorsPerDimension( currentLevel );
+    typename RegistrationType::SmoothingSigmasArrayType smoothingSigmas =
+                                                            registration->GetSmoothingSigmasPerLevel();
+    std::cout << "-------------------------------------" << std::endl;
+    std::cout << " Current multi-resolution level = " << currentLevel << std::endl;
+    std::cout << "    shrink factor = " << shrinkFactors << std::endl;
+    std::cout << "    smoothing sigma = " << smoothingSigmas[currentLevel] << std::endl;
+    std::cout << std::endl;
+    }
+};
+
 class CommandIterationUpdate : public itk::Command
 {
 public:
@@ -133,11 +184,13 @@ int main(int argc, char *argv[])
   }
 
   //
-  // Template/Prior - Query Rigid Registration
+  // Template/Prior - Query Registration
   //
+
   std::cout << "Starting rigid registration" << std::endl;
   typedef itk::VersorRigid3DTransform< double >                 RigidTransformType;
   RigidTransformType::Pointer  initialTransform = RigidTransformType::New();
+  RigidTransformType::Pointer  rigidTransform = RigidTransformType::New();
   typedef itk::CenteredTransformInitializer
           < RigidTransformType, ImageType, ImageType >          TransformInitializerType;
   TransformInitializerType::Pointer initializer = TransformInitializerType::New();
@@ -210,23 +263,102 @@ int main(int argc, char *argv[])
     std::cerr << err << std::endl;
     return EXIT_FAILURE;
   }
-  const unsigned int numberOfClasses = priorReader->GetOutput()->GetNumberOfComponentsPerPixel();
-  std::cout << "Scales:  " << gdOptimizer->GetScales() << std::endl;
+  typedef itk::CompositeTransform< double, Dimension >  CompositeTransformType;
+  CompositeTransformType::Pointer  compositeTransform  =
+          CompositeTransformType::New();
+  compositeTransform->AddTransform( initialTransform );
+  compositeTransform->AddTransform( rigidRegistration->GetModifiableTransform() );
+  rigidTransform->SetParameters( rigidRegistration->GetOutput()->Get()->GetParameters() );
+
+  std::cout << "Starting affine registration" << std::endl;
+  typedef itk::AffineTransform< double, Dimension >       AffineTransformType;
+  AffineTransformType::Pointer  affineTransform = AffineTransformType::New();
+  affineTransform->SetCenter( rigidTransform->GetCenter() );
+  affineTransform->SetTranslation( rigidTransform->GetTranslation() );
+  affineTransform->SetMatrix( rigidTransform->GetMatrix() );
+  typedef itk::ConjugateGradientLineSearchOptimizerv4Template< double >
+          AOptimizerType;
+  typedef itk::ImageRegistrationMethodv4< ImageType, ImageType,
+          AffineTransformType > ARegistrationType;
+  AOptimizerType::Pointer      affineOptimizer     = AOptimizerType::New();
+  //MetricType::Pointer          affineMetric        = MetricType::New();
+  ARegistrationType::Pointer   affineRegistration  = ARegistrationType::New();
+  affineRegistration->SetOptimizer(     affineOptimizer     );
+  affineRegistration->SetMetric( metric  );
+  affineRegistration->SetMovingInitialTransform(  compositeTransform  );
+  affineRegistration->SetFixedImage( queryReader->GetOutput()    );
+  affineRegistration->SetMovingImage( templateReader->GetOutput() );
+  affineRegistration->SetInitialTransform( affineTransform );
+  //affineRegistration->SetMovingInitialTransformInput( rigidRegistration->GetTransformOutput() );
+
+  typedef itk::RegistrationParameterScalesFromPhysicalShift<
+    MetricType> ScalesEstimatorType;
+  ScalesEstimatorType::Pointer scalesEstimator =
+    ScalesEstimatorType::New();
+  scalesEstimator->SetMetric( metric );
+  scalesEstimator->SetTransformForward( true );
+  affineOptimizer->SetScalesEstimator( scalesEstimator );
+  affineOptimizer->SetDoEstimateLearningRateOnce( true );
+  affineOptimizer->SetDoEstimateLearningRateAtEachIteration( false );
+  affineOptimizer->SetLowerLimit( 0 );
+  affineOptimizer->SetUpperLimit( 2 );
+  affineOptimizer->SetEpsilon( 0.2 );
+  affineOptimizer->SetNumberOfIterations( 200 );
+  affineOptimizer->SetMinimumConvergenceValue( 1e-6 );
+  affineOptimizer->SetConvergenceWindowSize( 10 );
+  CommandIterationUpdate::Pointer observer2 = CommandIterationUpdate::New();
+  affineOptimizer->AddObserver( itk::IterationEvent(), observer2 );
+  const unsigned int numberOfLevels2 = 1;
+  ARegistrationType::ShrinkFactorsArrayType shrinkFactorsPerLevel2;
+  shrinkFactorsPerLevel2.SetSize( numberOfLevels2 );
+  shrinkFactorsPerLevel2[0] = 2;
+  shrinkFactorsPerLevel2[1] = 1;
+  ARegistrationType::SmoothingSigmasArrayType smoothingSigmasPerLevel2;
+  smoothingSigmasPerLevel2.SetSize( numberOfLevels2 );
+  smoothingSigmasPerLevel2[0] = 1;
+  smoothingSigmasPerLevel2[1] = 0;
+  affineRegistration->SetNumberOfLevels ( numberOfLevels2 );
+  affineRegistration->SetShrinkFactorsPerLevel( shrinkFactorsPerLevel2 );
+  affineRegistration->SetSmoothingSigmasPerLevel( smoothingSigmasPerLevel2 );
+  // Create the Command interface observer and register it with the optimizer.
+  //
+  typedef RegistrationInterfaceCommand<ARegistrationType> AffineCommandType;
+  AffineCommandType::Pointer command2 = AffineCommandType::New();
+  affineRegistration->AddObserver( itk::MultiResolutionIterationEvent(), command2 );
+  try
+  {
+    affineRegistration->Update();
+    std::cout << "Optimizer stop condition: "
+              << affineRegistration->
+                          GetOptimizer()->GetStopConditionDescription()
+              << std::endl;
+  }
+  catch( itk::ExceptionObject & err )
+  {
+    std::cout << "ExceptionObject caught !" << std::endl;
+    std::cout << err << std::endl;
+    return EXIT_FAILURE;
+  }
+  //std::cout << "Scales:  " << gdOptimizer->GetScales() << std::endl;
 
   //
   // Prior rigid mapping
   //
   std::cout << "Starting the prior mapping" << std::endl;
-  const RigidTransformType::ParametersType finalRigidParameters =
+  compositeTransform->AddTransform( affineRegistration->GetModifiableTransform() );
+
+  const unsigned int numberOfClasses = priorReader->GetOutput()->GetNumberOfComponentsPerPixel();
+  /*const RigidTransformType::ParametersType finalRigidParameters =
           rigidRegistration->GetOutput()->Get()->GetParameters();
   RigidTransformType::Pointer finalRigidTransform = RigidTransformType::New();
   finalRigidTransform->SetFixedParameters( rigidRegistration->GetOutput()->Get()->GetFixedParameters() );
-  finalRigidTransform->SetParameters( finalRigidParameters );
+  finalRigidTransform->SetParameters( finalRigidParameters );*/
   VectorImageType::PixelType defaultPrior(numberOfClasses);
   defaultPrior.Fill(0.0); defaultPrior[0] = 1.0;
   typedef itk::ResampleImageFilter< VectorImageType, VectorImageType > VectorResampleFilterType;
   VectorResampleFilterType::Pointer vectorResampleFilter = VectorResampleFilterType::New();
-  vectorResampleFilter->SetTransform( finalRigidTransform );
+  //vectorResampleFilter->SetTransform( finalRigidTransform );
+  vectorResampleFilter->SetTransform( compositeTransform );
   vectorResampleFilter->SetInput( priorReader->GetOutput() );
   vectorResampleFilter->SetSize(    queryReader->GetOutput()->GetLargestPossibleRegion().GetSize() );
   vectorResampleFilter->SetOutputOrigin(  queryReader->GetOutput()->GetOrigin() );
@@ -260,8 +392,8 @@ int main(int argc, char *argv[])
   BinaryThresholdImageFilterType::Pointer threshold1
           = BinaryThresholdImageFilterType::New();
   threshold1->SetInput(classifier1->GetOutput());
-  threshold1->SetLowerThreshold(0);
-  threshold1->SetUpperThreshold(0);
+  threshold1->SetLowerThreshold(1);
+  threshold1->SetUpperThreshold(numberOfClasses);
   threshold1->SetInsideValue(1);
   threshold1->SetOutsideValue(0);
   typedef itk::BinaryBallStructuringElement<
@@ -274,6 +406,7 @@ int main(int argc, char *argv[])
   BinaryDilateImageFilterType::Pointer dilate1
           = BinaryDilateImageFilterType::New();
   dilate1->SetInput(threshold1->GetOutput());
+  dilate1->SetDilateValue(1);
   dilate1->SetKernel(structuringElement);
   typedef itk::ImageFileWriter< ClassifierOutputImageType >    WriterType;
   WriterType::Pointer writer1 = WriterType::New();
@@ -288,9 +421,14 @@ int main(int argc, char *argv[])
   CasterType::Pointer caster = CasterType::New();
   caster->SetInput( queryReader->GetOutput() );
   caster->Update();
-  typedef itk::Statistics::ImageToListSampleAdaptor< ArrayImageType > SampleType;
+  //typedef itk::Statistics::ImageToListSampleAdaptor< ArrayImageType > SampleType;
+  typedef itk::Statistics::ImageToListSampleFilter< ArrayImageType,
+          ClassifierOutputImageType > SampleType;
   SampleType::Pointer sample = SampleType::New();
-  sample->SetImage( caster->GetOutput() );
+  sample->SetInput( caster->GetOutput() );
+  sample->SetMaskImage( dilate1->GetOutput() );
+  sample->SetMaskValue( 1 );
+  sample->Update();
 
   //
   // Set the posterior image
@@ -341,8 +479,8 @@ int main(int argc, char *argv[])
   //
   // Parameter estimation
   //
-    typedef itk::Statistics::ImageToListSampleAdaptor< ArrayImageType > SampleType;
-    typedef itk::Statistics::WeightedCovarianceSampleFilter< SampleType >
+    //typedef itk::Statistics::ImageToListSampleAdaptor< ArrayImageType > SampleType;
+    typedef itk::Statistics::WeightedCovarianceSampleFilter< SampleType::ListSampleType >
             WeightedCovarianceAlgorithmType;
     std::vector< WeightedCovarianceAlgorithmType::Pointer > parameterEstimators;
     typedef itk::Statistics::GaussianMembershipFunction< MeasurementVectorType >
@@ -356,6 +494,7 @@ int main(int argc, char *argv[])
     itk::ImageRegionIterator<VectorImageType> p(joint, joint->GetLargestPossibleRegion());
     itk::ImageRegionIterator<VectorImageType> pos(posterior, posterior->GetLargestPossibleRegion());
     itk::ImageRegionConstIterator<VectorImageType> b(vectorResampleFilter->GetOutput(), vectorResampleFilter->GetOutput()->GetLargestPossibleRegion());
+    itk::ImageRegionConstIterator<ClassifierOutputImageType> Omega(dilate1->GetOutput(), dilate1->GetOutput()->GetLargestPossibleRegion());
     unsigned int numberOfSamples = 1000;
 
     switch(memFunc)
@@ -367,27 +506,32 @@ int main(int argc, char *argv[])
         MembershipFunctionType::Pointer membershipFunction =
                 MembershipFunctionType::New();
         WeightedCovarianceAlgorithmType::WeightArrayType weights;
-        weights.SetSize(sample->Size());
+        weights.SetSize(sample->GetOutput()->Size());
         q.GoToBegin();
         p.GoToBegin();
         b.GoToBegin();
+        Omega.GoToBegin();
         unsigned int r=0;
         while(!q.IsAtEnd())
         {
           VectorImageType::PixelType qr = q.Get();
           VectorImageType::PixelType pr = p.Get();
           VectorImageType::PixelType br = b.Get();
-          if (CurrentNumberOfIterations==0)
-            weights[r] = br[c];
-          else
-            weights[r] = pow(pr[c]/(qr[c]+zero),alpha);
+          if(Omega.Get()>0)
+          {
+            if (CurrentNumberOfIterations==0)
+              weights[r] = br[c];
+            else
+              weights[r] = pow(pr[c]/(qr[c]+zero),alpha);
+            r++;
+          }
           ++q;
           ++p;
           ++b;
-          r++;
+          ++Omega;
         }
         parameterEstimators.push_back( WeightedCovarianceAlgorithmType::New() );
-        parameterEstimators[c]->SetInput( sample );
+        parameterEstimators[c]->SetInput( sample->GetOutput() );
         parameterEstimators[c]->SetWeights( weights );
         parameterEstimators[c]->Update();
         std::cout <<"Sample weighted mean = "
