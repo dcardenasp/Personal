@@ -4,6 +4,10 @@
 #include "itkImageRegionConstIterator.h"
 #include "itkComposeImageFilter.h"
 #include "itkVectorIndexSelectionCastImageFilter.h"
+#include "itkImageRandomNonRepeatingConstIteratorWithIndex.h"
+#include "itkBinaryThresholdImageFilter.h"
+#include "itkBinaryBallStructuringElement.h"
+#include "itkBinaryDilateImageFilter.h"
 //IO
 #include "itkImageFileReader.h"
 #include "itkImageFileWriter.h"
@@ -15,6 +19,7 @@
 #include "itkCenteredTransformInitializer.h"
 #include "itkRegularStepGradientDescentOptimizerv4.h"
 #include "itkResampleImageFilter.h"
+#include "itkRegistrationParameterScalesFromPhysicalShift.h"
 
 #include "itkImageRegionConstIterator.h"
 
@@ -28,6 +33,41 @@
 #include "itkWeightedParzenMembershipFunction.h"
 #include "itkSampleClassifierFilter.h"
 
+//  The following section of code implements a Command observer
+//  used to monitor the evolution of the registration process.
+//
+#include "itkCommand.h"
+class CommandIterationUpdate : public itk::Command
+{
+public:
+  typedef CommandIterationUpdate   Self;
+  typedef itk::Command             Superclass;
+  typedef itk::SmartPointer<Self>  Pointer;
+  itkNewMacro( Self );
+protected:
+  CommandIterationUpdate() {};
+public:
+  typedef itk::RegularStepGradientDescentOptimizerv4<double> OptimizerType;
+  typedef const OptimizerType*                               OptimizerPointer;
+  void Execute(itk::Object *caller, const itk::EventObject & event) ITK_OVERRIDE
+  {
+    Execute( (const itk::Object *)caller, event);
+  }
+  void Execute(const itk::Object * object, const itk::EventObject & event) ITK_OVERRIDE
+  {
+    OptimizerPointer optimizer = static_cast< OptimizerPointer >( object );
+    if( ! itk::IterationEvent().CheckEvent( &event ) )
+      {
+      return;
+      }
+    std::cout << optimizer->GetCurrentIteration() << " = ";
+    std::cout << optimizer->GetValue() << " : ";
+    std::cout << optimizer->GetCurrentPosition() << std::endl;
+  }
+};
+
+
+
 int main(int argc, char *argv[])
 {
   const unsigned int Dimension = 3;
@@ -38,13 +78,35 @@ int main(int argc, char *argv[])
   typedef itk::VectorImage< ImagePixelType, Dimension > VectorImageType;
 
   unsigned int memFunc = 0;
-
+  double alpha = 1.0;
+  float zero = 1e-4;
 
   if( argc < 5 )
     {
-    std::cerr << "Usage: " << argv[0] << " InputImage TemplateImage PriorVectorImage OutputImage" << std::endl;
+    std::cerr << "Usage: " << argv[0] << " InputImage TemplateImage PriorVectorImage OutputImage [memfunc] [alpha]" << std::endl;
     return EXIT_FAILURE;
     }
+
+  if(argc>5)
+  {
+    memFunc = atoi(argv[5]);
+  }
+  std::cout << "Class membership functions are ";
+  switch(memFunc)
+  {
+  case 0:
+      std::cout << "Gaussians" << std::endl;
+      break;
+  case 1:
+      std::cout << "Parzen-based" << std::endl;
+      break;
+  }
+
+  if(argc>6)
+  {
+    alpha = atof(argv[6]);
+  }
+  std::cout << "Alpha factor for entropy and divergence is " << alpha << std::endl;
 
   //
   // Load query, template and prior images.
@@ -85,8 +147,11 @@ int main(int argc, char *argv[])
   initializer->MomentsOn();
   initializer->InitializeTransform();
 
+  typedef itk::MattesMutualInformationImageToImageMetricv4
+          < ImageType, ImageType >                              MetricType;
+  MetricType::Pointer metric = MetricType::New();
+
   typedef itk::RegularStepGradientDescentOptimizerv4<double>    GDOptimizerType;
-  GDOptimizerType::Pointer gdOptimizer = GDOptimizerType::New();
   typedef GDOptimizerType::ScalesType       OptimizerScalesType;
   OptimizerScalesType optimizerScales( initialTransform->GetNumberOfParameters() );
   const double translationScale = 1.0 / 1000.0;
@@ -96,15 +161,23 @@ int main(int argc, char *argv[])
   optimizerScales[3] = translationScale;
   optimizerScales[4] = translationScale;
   optimizerScales[5] = translationScale;
-  gdOptimizer->SetScales( optimizerScales );
-  gdOptimizer->SetNumberOfIterations( 5 );
+  /*
+  typedef itk::RegistrationParameterScalesFromPhysicalShift<MetricType> ScalesEstimatorType;
+  ScalesEstimatorType::Pointer scalesEstimator = ScalesEstimatorType::New();
+  scalesEstimator->SetMetric( metric );
+  scalesEstimator->SetTransformForward( true );
+  scalesEstimator->SetSmallParameterVariation( 1.0 );*/
+  GDOptimizerType::Pointer gdOptimizer = GDOptimizerType::New();
+  gdOptimizer->SetNumberOfIterations( 100 );
   gdOptimizer->SetLearningRate( 0.2 );
-  gdOptimizer->SetMinimumStepLength( 0.00001 );
+  gdOptimizer->SetMinimumStepLength( 0.001 );
   gdOptimizer->SetReturnBestParametersAndValue(true);
-
-  typedef itk::MattesMutualInformationImageToImageMetricv4
-          < ImageType, ImageType >                              MetricType;
-  MetricType::Pointer metric = MetricType::New();
+  //gdOptimizer->SetScalesEstimator( scalesEstimator );
+  gdOptimizer->SetScales( optimizerScales );
+  gdOptimizer->SetRelaxationFactor( 0.5 );
+  gdOptimizer->SetDoEstimateLearningRateOnce( true );
+  CommandIterationUpdate::Pointer observer = CommandIterationUpdate::New();
+  gdOptimizer->AddObserver( itk::IterationEvent(), observer );
 
   typedef itk::ImageRegistrationMethodv4
           < ImageType, ImageType, RigidTransformType >          RigidRegistrationType;
@@ -138,6 +211,7 @@ int main(int argc, char *argv[])
     return EXIT_FAILURE;
   }
   const unsigned int numberOfClasses = priorReader->GetOutput()->GetNumberOfComponentsPerPixel();
+  std::cout << "Scales:  " << gdOptimizer->GetScales() << std::endl;
 
   //
   // Prior rigid mapping
@@ -173,6 +247,41 @@ int main(int argc, char *argv[])
   }
 
   //
+  // Computing mask for all upcoming estimations.
+  //
+  typedef unsigned short  LabelType;
+  typedef itk::BayesianClassifierImageFilter< VectorImageType,LabelType,
+          float,float >   ClassifierFilterType;
+  ClassifierFilterType::Pointer classifier1 = ClassifierFilterType::New();
+  classifier1->SetInput( vectorResampleFilter->GetOutput() );
+  typedef ClassifierFilterType::OutputImageType      ClassifierOutputImageType;
+  typedef itk::BinaryThresholdImageFilter <ClassifierOutputImageType, ClassifierOutputImageType>
+      BinaryThresholdImageFilterType;
+  BinaryThresholdImageFilterType::Pointer threshold1
+          = BinaryThresholdImageFilterType::New();
+  threshold1->SetInput(classifier1->GetOutput());
+  threshold1->SetLowerThreshold(0);
+  threshold1->SetUpperThreshold(0);
+  threshold1->SetInsideValue(1);
+  threshold1->SetOutsideValue(0);
+  typedef itk::BinaryBallStructuringElement<
+          ClassifierOutputImageType::PixelType,Dimension> StructuringElementType;
+  StructuringElementType structuringElement;
+  structuringElement.SetRadius(10);
+  structuringElement.CreateStructuringElement();
+  typedef itk::BinaryDilateImageFilter <ClassifierOutputImageType,
+          ClassifierOutputImageType, StructuringElementType> BinaryDilateImageFilterType;
+  BinaryDilateImageFilterType::Pointer dilate1
+          = BinaryDilateImageFilterType::New();
+  dilate1->SetInput(threshold1->GetOutput());
+  dilate1->SetKernel(structuringElement);
+  typedef itk::ImageFileWriter< ClassifierOutputImageType >    WriterType;
+  WriterType::Pointer writer1 = WriterType::New();
+  writer1->SetFileName( "seg_mask.nii" );
+  writer1->SetInput( dilate1->GetOutput() );
+  writer1->Update();
+
+  //
   // Casting image to sample list
   //
   typedef itk::ComposeImageFilter< ImageType, ArrayImageType > CasterType;
@@ -197,6 +306,24 @@ int main(int argc, char *argv[])
   tmp.Fill(1.0/float(numberOfClasses));
   posterior->FillBuffer(tmp);
 
+  VectorImageType::Pointer hidden = VectorImageType::New();
+  hidden->SetRegions( queryReader->GetOutput()->GetLargestPossibleRegion() );
+  hidden->SetOrigin( queryReader->GetOutput()->GetOrigin() );
+  hidden->SetDirection( queryReader->GetOutput()->GetDirection() );
+  hidden->SetSpacing( queryReader->GetOutput()->GetSpacing() );
+  hidden->SetVectorLength(numberOfClasses);
+  hidden->Allocate();
+  hidden->FillBuffer(tmp);
+
+  VectorImageType::Pointer joint = VectorImageType::New();
+  joint->SetRegions( queryReader->GetOutput()->GetLargestPossibleRegion() );
+  joint->SetOrigin( queryReader->GetOutput()->GetOrigin() );
+  joint->SetDirection( queryReader->GetOutput()->GetDirection() );
+  joint->SetSpacing( queryReader->GetOutput()->GetSpacing() );
+  joint->SetVectorLength(numberOfClasses);
+  joint->Allocate();
+  joint->FillBuffer(tmp);
+
 
   //
   // Main loop
@@ -210,7 +337,7 @@ int main(int argc, char *argv[])
       CurrentNumberOfIterations < MaximumNumberOfIterations;
       CurrentNumberOfIterations++)
   {
-
+    std::cout << CurrentNumberOfIterations << "/" << MaximumNumberOfIterations << std::endl;
   //
   // Parameter estimation
   //
@@ -225,32 +352,38 @@ int main(int argc, char *argv[])
     MembershipFunctionContainerType::Pointer membershipFunctionContainer
             = MembershipFunctionContainerType::New();
     membershipFunctionContainer->Reserve(numberOfClasses);
-    itk::ImageRegionIterator<VectorImageType> q(posterior, posterior->GetLargestPossibleRegion());
+    itk::ImageRegionIterator<VectorImageType> q(hidden, hidden->GetLargestPossibleRegion());
+    itk::ImageRegionIterator<VectorImageType> p(joint, joint->GetLargestPossibleRegion());
+    itk::ImageRegionIterator<VectorImageType> pos(posterior, posterior->GetLargestPossibleRegion());
     itk::ImageRegionConstIterator<VectorImageType> b(vectorResampleFilter->GetOutput(), vectorResampleFilter->GetOutput()->GetLargestPossibleRegion());
-    for ( unsigned int c = 0; c < numberOfClasses; ++c )
+    unsigned int numberOfSamples = 1000;
+
+    switch(memFunc)
     {
-      std::cout << "Class " << c << " :" << std::endl;
-      unsigned int r=0;
-      MembershipFunctionType::Pointer membershipFunction =
-                MembershipFunctionType::New();
-      WeightedCovarianceAlgorithmType::WeightArrayType weights;
-      typedef itk::Statistics::WeightedParzenMembershipFunction< MeasurementVectorType >
-              WParzenMembershipFunctionType;
-      WParzenMembershipFunctionType::Pointer wpmf = WParzenMembershipFunctionType::New();
-      WParzenMembershipFunctionType::WeightArrayType wpmfWeights;
-      WParzenMembershipFunctionType::CovarianceMatrixType wpmfCov = wpmf->GetCovariance();
-      wpmfCov[0][0] = std::pow(40.0,2.0);
-      switch(memFunc)
+    case 0:
+      for ( unsigned int c = 0; c < numberOfClasses; ++c )
       {
-      case 0:
+        std::cout << "Class " << c << " :" << std::endl;
+        MembershipFunctionType::Pointer membershipFunction =
+                MembershipFunctionType::New();
+        WeightedCovarianceAlgorithmType::WeightArrayType weights;
         weights.SetSize(sample->Size());
         q.GoToBegin();
-
+        p.GoToBegin();
+        b.GoToBegin();
+        unsigned int r=0;
         while(!q.IsAtEnd())
         {
           VectorImageType::PixelType qr = q.Get();
-          weights[r] = qr[c];
+          VectorImageType::PixelType pr = p.Get();
+          VectorImageType::PixelType br = b.Get();
+          if (CurrentNumberOfIterations==0)
+            weights[r] = br[c];
+          else
+            weights[r] = pow(pr[c]/(qr[c]+zero),alpha);
           ++q;
+          ++p;
+          ++b;
           r++;
         }
         parameterEstimators.push_back( WeightedCovarianceAlgorithmType::New() );
@@ -264,15 +397,47 @@ int main(int argc, char *argv[])
         membershipFunction->SetMean( parameterEstimators[c]->GetMean() );
         membershipFunction->SetCovariance( parameterEstimators[c]->GetCovarianceMatrix() );
         membershipFunctionContainer->SetElement( c, membershipFunction.GetPointer() );
-        break;
-      case 1:
-        /*wpmf->SetSampleList();
-        wpmf->SetWeights();
-        wpmf->SetCovariance();*/
-
-        membershipFunctionContainer->SetElement( c, wpmf.GetPointer() );
-        break;
       }
+      break;
+    case 1:
+      std::cout << "Selecting samples for building the pdf" << std::endl;
+      itk::ImageRegionConstIteratorWithIndex<VectorImageType> itIndVec(vectorResampleFilter->GetOutput(), vectorResampleFilter->GetOutput()->GetLargestPossibleRegion());
+      itk::ImageRandomNonRepeatingConstIteratorWithIndex<ArrayImageType>
+              itRndImg(caster->GetOutput(), caster->GetOutput()->GetLargestPossibleRegion());
+      itRndImg.SetNumberOfSamples( numberOfSamples );
+      typedef itk::Statistics::WeightedParzenMembershipFunction< MeasurementVectorType >
+              WParzenMembershipFunctionType;
+      WParzenMembershipFunctionType::Pointer wpmf = WParzenMembershipFunctionType::New();
+      std::vector<WParzenMembershipFunctionType::WeightArrayType> wpmfWeights(numberOfClasses);
+      std::vector<ArrayImageType::PixelType> samplelist(numberOfSamples);
+      WParzenMembershipFunctionType::CovarianceMatrixType wpmfCov = wpmf->GetCovariance();
+      wpmfCov[0][0] = std::pow(40.0,2.0);
+      for(unsigned int c=0; c<numberOfClasses; c++)
+      {
+        (wpmfWeights[c]).SetSize(numberOfSamples);
+      }
+      itRndImg.GoToBegin();
+      unsigned int r=0;
+      while(!itRndImg.IsAtEnd())
+      {
+        samplelist[r] = itRndImg.Get();
+        itIndVec.SetIndex(itRndImg.GetIndex());
+        for(unsigned int c=0; c<numberOfClasses; c++)
+        {
+          (wpmfWeights[c]).SetElement(r,itIndVec.Get()[c]);
+        }
+        ++itRndImg;
+        r++;
+      }
+      for (unsigned int c=0; c<numberOfClasses; c++)
+      {
+        wpmf->SetSampleList( samplelist );
+        wpmf->SetWeights(wpmfWeights[c]);
+        wpmf->SetCovariance(wpmfCov);
+        membershipFunctionContainer->SetElement( c, wpmf.GetPointer() );
+      }
+      std::cout << "Samples selected." << std::endl;
+      break;
     }
 
   //
@@ -297,24 +462,52 @@ int main(int argc, char *argv[])
   //
   // Compute posteriors
   //
+    itk::ImageRegionConstIterator<VectorImageType> f(bayesianInitializer->GetOutput(), bayesianInitializer->GetOutput()->GetLargestPossibleRegion());
+    f.GoToBegin();
     b.GoToBegin();
     q.GoToBegin();
+    pos.GoToBegin();
     unsigned int r=0;
+    float exp = 1.0;
+    if(alpha!=1.0)
+      exp = (alpha-1)/alpha;
+
     while(!q.IsAtEnd())
     {
       VectorImageType::PixelType qr = q.Get();
       VectorImageType::PixelType br = b.Get();
-      double sqr=0;
+      VectorImageType::PixelType fr = f.Get();
+      VectorImageType::PixelType pos_r = pos.Get();
+      float z=0;
       for(unsigned int c=0; c<numberOfClasses; c++)
       {
-        qr[c] *= br[c];
-        sqr += qr[c];
+        pos_r[c] = br[c]*fr[c];
+        z += pos_r[c];
       }
-      for(unsigned int c=0; c<numberOfClasses; c++)
-        qr[c] /= sqr;
+      if(z<1e-5)
+      {
+        pos_r[0] = 1.0;
+        qr[0] = 1.0;
+        for(unsigned int c=1; c<numberOfClasses; c++)
+        {
+          pos_r[c] = 0.0;
+          qr[c] = 0.0;
+        }
+      }
+      else
+      {
+        for(unsigned int c=0; c<numberOfClasses; c++)
+        {
+          pos_r[c] /= z;
+          qr[c] = pow(pos_r[c],exp);
+        }
+      }
+      pos.Set(pos_r);
       q.Set(qr);
       ++q;
       ++b;
+      ++f;
+      ++pos;
     }
 
   //
