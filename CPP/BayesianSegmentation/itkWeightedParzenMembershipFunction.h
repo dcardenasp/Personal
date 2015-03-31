@@ -60,7 +60,7 @@ public:
 
   /** Set the samples of the Gaussian distribution. Mean is a vector type
    * similar to the measurement type but with a real element type. */
-  void SetSampleList( typename SampleListType::Pointer list );
+  void SetSampleList( std::vector<MeasurementVectorType> list );
 
   typedef Array< typename MeasurementVectorType::ComponentType > WeightArrayType;
   void SetWeights( WeightArrayType weights );
@@ -97,9 +97,9 @@ private:
   WeightedParzenMembershipFunction(const Self &);   //purposely not implemented
   void operator=(const Self &); //purposely not implemented
 
-  typename SampleListType::Pointer m_SampleList;      // samples
-  WeightArrayType                  m_Weights;         // weights
-  CovarianceMatrixType             m_Covariance;      // covariance matrix
+  std::vector<MeasurementVectorType> m_SampleList;      // samples
+  WeightArrayType                    m_Weights;         // weights
+  CovarianceMatrixType               m_Covariance;      // covariance matrix
 
   // inverse covariance matrix. automatically calculated
   // when covariace matirx is set.

@@ -136,10 +136,11 @@ int main(int argc, char *argv[])
   float zero = 1e-4;
   unsigned int numberOfSamples = 100;
   bool registerPrior = true;
+  unsigned int MaximumNumberOfIterations = 100;
 
   if( argc < 5 )
     {
-    std::cerr << "Usage: " << argv[0] << " InputImage TemplateImage PriorVectorImage OutputImage [memfunc] [alpha] [ParzenSamples] [registerPrior?]" << std::endl;
+    std::cerr << "Usage: " << argv[0] << " InputImage TemplateImage PriorVectorImage OutputImage [memfunc] [alpha] [ParzenSamples] [registerPrior?] [MaximumNumberOfIterations]" << std::endl;
     return EXIT_FAILURE;
     }
 
@@ -181,6 +182,12 @@ int main(int argc, char *argv[])
     std::cout << "Priors will be aligned" << std::endl;
   else
     std::cout << "Priors won't be aligned" << std::endl;
+
+  if(argc>9)
+  {
+    MaximumNumberOfIterations = atoi(argv[9]);
+  }
+  std::cout << "Maximum number of iterations is " << MaximumNumberOfIterations << std::endl;
 
 
   //
@@ -503,12 +510,12 @@ int main(int argc, char *argv[])
   conditional->Allocate();
   conditional->FillBuffer(tmp);
 
-  itk::ImageRegionIterator<VectorImageType> q(hidden, hidden->GetLargestPossibleRegion());
-  itk::ImageRegionIterator<VectorImageType> p(joint, joint->GetLargestPossibleRegion());
-  itk::ImageRegionIterator<VectorImageType> pos(posterior, posterior->GetLargestPossibleRegion());
-  itk::ImageRegionIterator<VectorImageType> f(conditional, conditional->GetLargestPossibleRegion());
-  itk::ImageRegionConstIterator<VectorImageType> b(priorImage, priorImage->GetLargestPossibleRegion());
-  itk::ImageRegionConstIterator<ClassifierOutputImageType> Omega(dilate1->GetOutput(), dilate1->GetOutput()->GetLargestPossibleRegion());
+  itk::ImageRegionIteratorWithIndex<VectorImageType> q(hidden, hidden->GetLargestPossibleRegion());
+  itk::ImageRegionIteratorWithIndex<VectorImageType> p(joint, joint->GetLargestPossibleRegion());
+  itk::ImageRegionIteratorWithIndex<VectorImageType> pos(posterior, posterior->GetLargestPossibleRegion());
+  itk::ImageRegionIteratorWithIndex<VectorImageType> f(conditional, conditional->GetLargestPossibleRegion());
+  itk::ImageRegionConstIteratorWithIndex<VectorImageType> b(priorImage, priorImage->GetLargestPossibleRegion());
+  itk::ImageRegionConstIteratorWithIndex<ClassifierOutputImageType> Omega(dilate1->GetOutput(), dilate1->GetOutput()->GetLargestPossibleRegion());
   itk::ImageRegionConstIterator<ImageType> x(queryReader->GetOutput(), queryReader->GetOutput()->GetLargestPossibleRegion());
 
   unsigned int OmegaSize = 0;
@@ -523,9 +530,11 @@ int main(int argc, char *argv[])
           BayesianInitializerType;
   BayesianInitializerType::Pointer bayesianInitializer
           = BayesianInitializerType::New();
-  unsigned int MaximumNumberOfIterations = 100;
   float cost_func = 0;
-  for(unsigned int CurrentNumberOfIterations=0;
+  unsigned int CurrentNumberOfIterations = 0;
+  float pos_change=0;
+  float LL=0;
+  for(CurrentNumberOfIterations=0;
       CurrentNumberOfIterations < MaximumNumberOfIterations;
       CurrentNumberOfIterations++)
   {
@@ -571,9 +580,7 @@ int main(int argc, char *argv[])
             VectorImageType::PixelType qr = q.Get();
             VectorImageType::PixelType br = b.Get();
             VectorImageType::PixelType fr = f.Get();
-            double w = br[c]/(qr[c]+zero);
-            w = std::pow(w,alpha);
-            weights[r] = w*fr[c];
+            weights[r] = std::pow((br[c]*fr[c])/(qr[c]+zero),alpha);
             r++;
           }
           ++q;
@@ -626,50 +633,52 @@ int main(int argc, char *argv[])
       unsigned int r=0;
       while(!itRndImg.IsAtEnd())
       {
+        Omega.SetIndex(itRndImg.GetIndex());
         if(Omega.Get()>0)
         {
           samplelist[r] = itRndImg.Get();
-          std::cout << samplelist[r];
+          //std::cout << samplelist[r];
           pos.SetIndex( itRndImg.GetIndex() );
           VectorImageType::PixelType pos_r = pos.Get();
           for(unsigned int c=0; c<numberOfClasses; c++)
           {
             (wpmfWeights[c]).SetElement(r,pos_r[c]);
-            std::cout << "\t" << (wpmfWeights[c]).GetElement(r);
+            //std::cout << "\t" << (wpmfWeights[c]).GetElement(r);
           }
-          std::cout << std::endl;
+          //std::cout << std::endl;
           r++;
         }
         ++itRndImg;
-        ++Omega;
         if(r >= numberOfSamples)
           break;
       }
       //std::cout << "samples selected" << std::endl;
 
       //Covariance update
-      q.GoToBegin();
-      p.GoToBegin();
-      b.GoToBegin();
-      x.GoToBegin();
-      pos.GoToBegin();
-      Omega.GoToBegin();
-      r=0;
       std::vector<double> wfd(numberOfClasses);
       std::vector<double> wf(numberOfClasses);
       for(unsigned int c=0; c<numberOfClasses; c++)
       {
         wfd[c] = 0;
         wf[c] = 0;
-      }      
-      while(!q.IsAtEnd())
+      }
+      r=0;
+      unsigned int L=100000;
+      itRndImg.GoToBegin();
+      while(!itRndImg.IsAtEnd())
       {
+        Omega.SetIndex( itRndImg.GetIndex() );
         if(Omega.Get()>0)
         {
+          q.SetIndex( itRndImg.GetIndex() );
+          p.SetIndex( itRndImg.GetIndex() );
+          b.SetIndex( itRndImg.GetIndex() );
+          f.SetIndex( itRndImg.GetIndex() );
           VectorImageType::PixelType qr = q.Get();
           VectorImageType::PixelType pr = p.Get();
           VectorImageType::PixelType br = b.Get();
-          ImageType::PixelType xr = x.Get();
+          VectorImageType::PixelType fr = f.Get();
+          ArrayImageType::PixelType  xr = itRndImg.Get();
           std::vector<double> w(numberOfClasses);
           std::vector<double> fd(numberOfClasses);
           std::vector<double> nf(numberOfClasses);
@@ -678,11 +687,11 @@ int main(int argc, char *argv[])
             fd[c] = 0;
             nf[c] = 0;
             w[c] = br[c]/(qr[c]+zero);
-            w[c] = std::pow(w[c],alpha);
+            w[c] = (std::pow(w[c],alpha))*(std::pow(fr[c],alpha-1));
           }
           for(unsigned int m=0; m<numberOfSamples; m++)
           {
-            float d = (x.Get()-samplelist[m][0]);
+            float d = (xr[0] -samplelist[m][0]);
             d = std::pow(d,2.0);
             itk::Statistics::GaussianDistribution::Pointer normal =
                 itk::Statistics::GaussianDistribution::New();
@@ -690,7 +699,7 @@ int main(int argc, char *argv[])
             for(unsigned int c=0; c<numberOfClasses; c++)
             {
               normal->SetVariance((wpmfCov[c])[0][0]);
-              double k = normal->EvaluatePDF(x.Get());
+              double k = normal->EvaluatePDF( xr[0] );
               fd[c] = fd[c] + (wpmfWeights[c]).GetElement(m)*k*d;
               nf[c] = nf[c] + (wpmfWeights[c]).GetElement(m)*k;
             }
@@ -702,17 +711,15 @@ int main(int argc, char *argv[])
           }
           r++;
         }
-        ++q;
-        ++p;
-        ++b;
-        ++pos;
-        ++Omega;
+        if(r>=L)
+          break;
+        ++itRndImg;
       }
 
       for(unsigned int c=0; c<numberOfClasses; c++)
       {
         (wpmfCov[c])[0][0] = wfd[c]/wf[c];
-        std::cout << "Class " << c << ": " << wpmfCov[c] << std::endl;
+        //std::cout << "Class " << c << ": " << wpmfCov[c] << std::endl;
       }
 
       for (unsigned int c=0; c<numberOfClasses; c++)
@@ -721,7 +728,7 @@ int main(int argc, char *argv[])
         wpmf->SetWeights(wpmfWeights[c]);
         wpmf->SetCovariance(wpmfCov[c]);
         membershipFunctionContainer->SetElement( c, wpmf.GetPointer() );
-        std::cout << "class " << c << ": membership added" << std::endl;
+        //std::cout << "class " << c << ": membership added" << std::endl;
       }
       break;
     }
@@ -737,6 +744,7 @@ int main(int argc, char *argv[])
     bayesianInitializer->SetInput( queryReader->GetOutput() );
     bayesianInitializer->SetNumberOfClasses( numberOfClasses );
     bayesianInitializer->SetMembershipFunctions( membershipFunctionContainer );
+    std::cout << bayesianInitializer->GetMultiThreader() << std::endl;
     try
     {
       bayesianInitializer->Update();
@@ -749,6 +757,7 @@ int main(int argc, char *argv[])
       std::cerr << err << std::endl;
       return EXIT_FAILURE;
     }
+
 
   //
   // Compute posteriors
@@ -780,7 +789,8 @@ int main(int argc, char *argv[])
     }
     float pr=0;
     cost_func = 0;
-    float pos_change=0;
+    LL=0;
+    pos_change=0;
     while(!q.IsAtEnd())
     {
       if (Omega.Get()>0)
@@ -817,6 +827,8 @@ int main(int argc, char *argv[])
         }
         pr = std::pow(pr,alpha);
         cost_func += pr;
+        if( pr>1e-4 )
+          LL += std::log(pr);
         pos.Set(pos_r);
         q.Set(qr);
         r++;
@@ -827,7 +839,7 @@ int main(int argc, char *argv[])
       ++pos;
       ++Omega;
     }
-    std::cout << CurrentNumberOfIterations << "\t" << -std::log(cost_func) << "\t" << pos_change/float(OmegaSize) << std::endl;
+    std::cout << CurrentNumberOfIterations << "\t" << -std::log(cost_func) << "\t" << -LL << "\t" << pos_change/float(OmegaSize) << std::endl;
     if (pos_change/float(OmegaSize)<1e-4)
       break;
   }
@@ -856,9 +868,17 @@ int main(int argc, char *argv[])
     std::cerr << excp << std::endl;
     return EXIT_FAILURE;
     }
+    if (CurrentNumberOfIterations >= MaximumNumberOfIterations)
+    {
+      std::cout << "Algorithm stopped after MaximumNumberOfIterations: " << MaximumNumberOfIterations << std::endl;
+    }
+    else
+    {
+      std::cout << "Algorithm converged by minimum change of Posterior achieved: " << pos_change/float(OmegaSize) << std::endl;
+    }
   // Testing print
-  classifier->Print( std::cout );
-  std::cout << "Test passed." << std::endl;
+  //classifier->Print( std::cout );
+  //std::cout << "Test passed." << std::endl;
 
   return EXIT_SUCCESS;
 }

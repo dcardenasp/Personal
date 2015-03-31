@@ -36,17 +36,21 @@ int main( int argc, char *argv[] )
     v3[1] = 3.0;
     v3[2] = 4.0;
 
+    std::vector<VectorType> samplelist(2);
+    samplelist[0] = v1;
+    samplelist[1] = v2;
+
     typedef itk::Statistics::ParzenMembershipFunction< VectorType > PMFType;
     PMFType::Pointer pmf = PMFType::New();
     pmf->SetSampleList( sample );
 
     typedef itk::Statistics::WeightedParzenMembershipFunction< VectorType > WPMFType;
     WPMFType::Pointer wpmf = WPMFType::New();
-    wpmf->SetSampleList( sample );
+    wpmf->SetSampleList( samplelist );
     WPMFType::WeightArrayType weights;
     weights.SetSize( 2 );
     weights.SetElement( 0, 1.0 );
-    weights.SetElement( 1, 2.0 );
+    weights.SetElement( 1, 1.0 );
     wpmf->SetWeights( weights );
 
     for(int d=0; d<ImageDimension; d++)

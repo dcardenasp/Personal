@@ -27,13 +27,10 @@ namespace Statistics
 template< typename TMeasurementVector >
 WeightedParzenMembershipFunction< TMeasurementVector >
 ::WeightedParzenMembershipFunction()
-{  
+{
   MeasurementVectorType sample;
   sample.Fill( 0.0 );
-  m_SampleList = SampleListType::New();
-  m_SampleList->SetMeasurementVectorSize(this->GetMeasurementVectorSize());
-  m_SampleList->Resize(1);
-  m_SampleList->SetMeasurementVector(0,sample);
+  m_SampleList.resize(1,sample);
 
   m_PreFactor = 1.0 / std::sqrt(2.0 * vnl_math::pi); // default univariate
 
@@ -53,8 +50,8 @@ WeightedParzenMembershipFunction< TMeasurementVector >
   Superclass::PrintSelf(os, indent);
 
   //os << indent << "Mean: " << m_Mean << std::endl;
-  os << indent << "Samples: " << std::endl;
-  os << indent << m_SampleList << std::endl;
+  //os << indent << "Samples: " << std::endl;
+  //os << indent << m_SampleList << std::endl;
   os << indent << "Covariance: " << std::endl;
   os << m_Covariance.GetVnlMatrix();
   os << indent << "InverseCovariance: " << std::endl;
@@ -67,14 +64,16 @@ WeightedParzenMembershipFunction< TMeasurementVector >
 template< typename TMeasurementVector >
 void
 WeightedParzenMembershipFunction< TMeasurementVector >
-::SetSampleList( typename SampleListType::Pointer list)
+::SetSampleList(std::vector<MeasurementVectorType> list)
 {
-  this->SetMeasurementVectorSize( list->GetMeasurementVectorSize() );
-  m_SampleList->SetMeasurementVectorSize(this->GetMeasurementVectorSize());
-  m_SampleList->Resize( list->Size() );
-  for (unsigned int i=0; i<list->Size(); i++ )
+
+  //this->SetMeasurementVectorSize( list[0].GetMeasurementVectorSize() );
+  MeasurementVectorType sample;
+  sample.Fill( 0.0 );
+  m_SampleList.resize( list.size(), sample );
+  for (unsigned int i=0; i<list.size(); i++ )
   {
-    m_SampleList->SetMeasurementVector(i, list->GetMeasurementVector(i) );
+    m_SampleList[i] = list[i];
   }
   this->Modified();
 }
@@ -175,22 +174,22 @@ WeightedParzenMembershipFunction< TMeasurementVector >
   //
   // This is manually done to remove dynamic memory allocation:
   // double temp = dot_product( tempVector,  m_InverseCovariance.GetVnlMatrix() * tempVector );
-  //  
+  //
   double summation = 0.0, temp, z=0.0;
   MeasurementVectorType sample;
-  for(unsigned int i = 0; i<this->m_SampleList->Size(); i++)
+  for(unsigned int i = 0; i<this->m_SampleList.size(); i++)
   {
-    sample = this->m_SampleList->GetMeasurementVector(i);
+    sample = this->m_SampleList[i];//->GetMeasurementVector(i);
     temp = 0.0;
     for(MeasurementVectorSizeType r = 0; r < measurementVectorSize; ++r)
-    {      
+    {
       double rowdot = 0.0;
       for (MeasurementVectorSizeType c = 0; c < measurementVectorSize; ++c)
       {
         rowdot += m_InverseCovariance(r, c) * ( measurement[c] - sample[c] );
       }
       temp += rowdot * ( measurement[r] - sample[r] );
-    }    
+    }
     summation += std::exp(-0.5 * temp)*(this->m_Weights.GetElement(i));
     z += this->m_Weights.GetElement(i);
   }
