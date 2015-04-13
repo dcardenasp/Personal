@@ -11,7 +11,7 @@ addpath(genpath(fullfile(path_base,'SliceBrowser')))
 addpath(genpath(fullfile(path_base,'spm8')))
 addpath(genpath(fullfile(path_base,'MLmat')))
 
-M = 5000;
+M = 2000;
 
 X = spm_read_vols(spm_vol('/media/dcardenasp/VERBATIM/MRI/OAS1_0001_MR1/mri/T1.nii'));
 siz = size(X);
@@ -34,8 +34,11 @@ for i=1:27
   tmp(:,i) = Y(:);
 end
 X0 = X;
-X  = tmp;
-clear tmp Y
+[X1,X2,X3] =  ndgrid(1:siz(1),1:siz(2),1:siz(3));
+X  = [tmp X1(:) X2(:) X3(:)];
+X  = zscore(X);
+
+clear tmp Y X1 X2 X3
 %%
 
 [~,L] = max(Pr,[],4);
@@ -60,10 +63,9 @@ B1 = B1(ind3,:);
 Dx  = pdist(X1);
 Db  = pdist(B1);
 
-sb = kScaleOptimization(Db);
+sb = kScaleOptimization(B1);
 Kb = kExpQuad(squareform(Db),sb,'distances');
-% [Ax,Kx] = kITLMetricLearningMahalanobis_fast(X1,Kb,2,[5e-3 5e-3],true,eye(1));
-[Ax,sx] = kMetricLearningMahalanobis(X1,Kb,[],27,true,[5e-3 5e-3]);
+[Ax,sx] = kMetricLearningMahalanobis(X1,Kb,[],size(X1,2),true,[5e-4 5e-4]);
 y=X1*Ax;
 d=pdist2(y,y);
 Ky=exp(-d.^2/2);
